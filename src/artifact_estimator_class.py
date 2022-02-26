@@ -1,9 +1,7 @@
 import numpy as np
 import sys
-#sys.path.append('/home/visitor/jeffbrown/artificial-retina-software-pipeline/utilities/')
-sys.path.append('/Volumes/Lab/Users/jeffbrown/artificial-retina-software-pipeline/utilities')
-# sys.path.append('/Volumes/Lab/Users/jeffbrown/artificial-retina-software-pipeline/utilities')
-import visionloader as vl
+
+import utilities.visionloader as vl
 print(vl.__file__)
 
 
