@@ -1,9 +1,9 @@
 import os
-os.environ["OMP_NUM_THREADS"] = "1" 
-os.environ["OPENBLAS_NUM_THREADS"] = "1" 
-os.environ["MKL_NUM_THREADS"] = "1" 
-os.environ["VECLIB_MAXIMUM_THREADS"] = "1" 
-os.environ["NUMEXPR_NUM_THREADS"] = "1" 
+os.environ["OMP_NUM_THREADS"] = "1" # export OMP_NUM_THREADS=1
+os.environ["OPENBLAS_NUM_THREADS"] = "1" # export OPENBLAS_NUM_THREADS=1
+os.environ["MKL_NUM_THREADS"] = "1" # export MKL_NUM_THREADS=1
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1" # export VECLIB_MAXIMUM_THREADS=1
+os.environ["NUMEXPR_NUM_THREADS"] = "1" # export NUMEXPR_NUM_THREADS=1
 
 import sys
 
@@ -32,12 +32,12 @@ parser.add_argument('-el', '--end_time_limit', type=int, help="Signal window end
 parser.add_argument('-cmp', '--compartments', type=str, nargs='+',  help="Cell compartments.")
 parser.add_argument('-a', '--all', help="Run gsort on all cell types.", action="store_true")
 parser.add_argument('-so', '--space_only', help="Disregard temporal information.", action="store_true")
-parser.add_argument('-f', '--file', type=str, help="List of piece-electrode-cell-ei's")
 parser.add_argument('-sm', '--small', help="Save subset of data", action="store_true")
 parser.add_argument('-ov', '--overwrite', help="Overwrite pickle files", action="store_true")
 parser.add_argument('-sasi', '--sasi', help="Exclude crap in all considerations", action="store_true")
 
 args = parser.parse_args()
+
 dataset = args.dataset
 vstim_datarun = args.wnoise
 estim_datarun = args.estim
@@ -182,6 +182,15 @@ rat = 2
 max_electrodes_considered = 30
 
 
+NUM_ELECTRODES = len(cell_ei)
+NUM_AMPS = 40
+    
+cellids = np.array(sorted(vstim_data.get_cell_ids()))
+gsorted_cells = []
+data_tensor = np.zeros((len(cellids), NUM_ELECTRODES, NUM_AMPS))
+filtered_data_tensor = np.zeros((len(cellids), NUM_ELECTRODES, NUM_AMPS))
+run_data_tensor = np.zeros((len(cellids), NUM_ELECTRODES))
+
 
 
 def get_collapsed_ei_thr(cell_no, thr_factor):
@@ -222,48 +231,37 @@ if __name__ == "__main__":
     logging.info('end time limit: ' + str(end_time_limit))
     
     patterns = []
-    stim_elecs = []
-    num_amps = []
+    movies = []
     for filename in os.listdir(pattern_path):
             if filename.startswith('p') and filename.endswith('.mat'): 
-                pattern = int(re.findall('\d+', filename)[0])
-                patterns.append(pattern)
+                pattern_movie = re.findall('\d+', filename)
+                patterns.append(int(pattern_movie[0]))
+                
 
-                pattern_file = loadmat(os.path.join(pattern_path, 'p' + str(pattern) + '.mat'), squeeze_me=True, struct_as_record=False)
-                num_amps.append(len(pattern_file['patternStruct'].amplitudes))
-                stim_elecs.append(pattern_file['patternStruct'].stimElecs)
-
-    patterns = np.array(patterns)
-    stim_elecs = np.array(stim_elecs, dtype=object)
-    num_amps = np.array(num_amps)
+    patterns, counts = np.unique(np.array(patterns), return_counts=True)
     
     NUM_ELECTRODES = len(patterns)
-    NUM_AMPS = np.max(num_amps)
+    NUM_AMPS = np.max(counts)
     cellids = np.array(sorted(vstim_data.get_cell_ids()))
     gsorted_cells = []
     data_tensor = np.zeros((len(cellids), NUM_ELECTRODES, NUM_AMPS))
     filtered_data_tensor = np.zeros((len(cellids), NUM_ELECTRODES, NUM_AMPS))
     run_data_tensor = np.zeros((len(cellids), NUM_ELECTRODES))
-
+    
+    pool = mp.Pool(processes = threads)
+   
     outpath = os.path.join(filepath, dataset, estim_datarun, vstim_datarun)
 
-    pool = mp.Pool(processes = threads)
-        
     for type_ in cell_types:
         print("Running for cell type %s" %type_)
         for cell in tqdm.tqdm(vstim_data.get_all_cells_similar_to_type(type_)):
             cell_ind = cellids.index(cell)
-
-            good_inds, EI = get_collapsed_ei_thr(cell, noise_thresh)
-            patterns_of_interest = []
-            for i in range(len(stim_elecs)):
-                if np.any(np.in1d(stim_elecs[i], good_inds + 1)):
-                    patterns_of_interest.append(patterns[i])
-
-            if len(patterns_of_interest) == 0:
-                continue
-            print(patterns_of_interest)
             
+            good_inds, EI = get_collapsed_ei_thr(cell, noise_thresh)
+            if len(good_inds)==0:
+                continue
+            print(good_inds)
+
             logging.info('\ncell considered: ' + str(cell))
             
             ei = vstim_data.get_ei_for_cell(cell).ei
@@ -292,11 +290,12 @@ if __name__ == "__main__":
                 continue
             
             data_on_cells = get_center_eis(cell, electrode_list, ap = (vstim_analysis_path[:-7], vstim_datarun.rsplit('/')[-1]), excluded_types = excluded_types, excluded_cells = list(duplicates), power_threshold=pt, array_id = array_id, sample_len_left = time_limit ,sample_len_right = time_limit)
+            good_patterns = (good_inds + 1).tolist()
             
             logging.info('electrodes considered: ' + str(np.array(electrode_list) + 1))
-            logging.info('patterns considered: ' + str(patterns_of_interest))
-
-            results = pool.starmap_async(src.cell_pattern_analysis.run_movie, product([cell], patterns_of_interest,[i for i in range(len(patterns_of_interest))], [max(num_amps)], [(electrode_list,data_on_cells,start_time_limit,end_time_limit,estim_analysis_path)]))
+            logging.info('patterns considered: ' + str(good_patterns))
+            
+            results = pool.starmap(run_movie, product([cell], good_patterns,[i for i in range(len(good_patterns))], [max(counts)], [(electrode_list,data_on_cells)]))
             ps = np.array([r[0] for r in results for i in range(len(r[1])) if len(r[1])>0]).astype(int)
             ks = np.array([i for r in results for i in r[1] if len(r[1])>0]).astype(int)
             cprobs = [i for r in results for i in r[2] if len(r[1])>0]
@@ -308,8 +307,8 @@ if __name__ == "__main__":
             
             if cell_ind not in gsorted_cells:
                 gsorted_cells.append(cell_ind)
-                
+
             savemat(outpath + '/' + 'gsort_full_data_tensor.mat', {'cells': cellids, 'gsorted_cells': np.sort(np.array(gsorted_cells)),'probs': data_tensor, 'filtered_probs':filtered_data_tensor, 'run':run_data_tensor})
-            
+                
     pool.close()
     logging.info('finished')
