@@ -1,18 +1,18 @@
 import numpy as np
 
 import sys
-sys.path.append('/home/visitor/jeffbrown/artificial-retina-software-pipeline/utilities/cython_extensions')
+# sys.path.append('/home/visitor/jeffbrown/artificial-retina-software-pipeline/utilities/cython_extensions')
 
 
 
 import pyximport
 pyximport.install()
 
-import visionfile_cext as vcext
+import src.utilities.cython_extensions.visionfile_cext as vcext
 
 #import visionfile_cext as vcext
-from bin2py import FakeArrayID, PyBinHeader
-import electrode_map as elmap
+from src.utilities.bin2py import FakeArrayID, PyBinHeader
+import src.utilities.electrode_map as elmap
 
 import struct
 import os

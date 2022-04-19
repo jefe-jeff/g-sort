@@ -1,7 +1,7 @@
 import struct
 import numpy as np
 import os
-import cython_extensions.bin2py_cythonext as bin2py_cythonext
+import src.utilities.cython_extensions.bin2py_cythonext as bin2py_cythonext
 #import bin2py_cythonext
 
 from typing import Dict, Tuple, List, Optional, Any, Union, Set, BinaryIO
