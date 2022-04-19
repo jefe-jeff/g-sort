@@ -242,7 +242,6 @@ if __name__ == "__main__":
     
     NUM_ELECTRODES = len(patterns)
     NUM_AMPS = np.max(counts)
-    cellids = np.array(sorted(vstim_data.get_cell_ids()))
     gsorted_cells = []
     data_tensor = np.zeros((len(cellids), NUM_ELECTRODES, NUM_AMPS))
     filtered_data_tensor = np.zeros((len(cellids), NUM_ELECTRODES, NUM_AMPS))
@@ -295,7 +294,8 @@ if __name__ == "__main__":
             logging.info('electrodes considered: ' + str(np.array(electrode_list) + 1))
             logging.info('patterns considered: ' + str(good_patterns))
             
-            results = pool.starmap(run_movie, product([cell], good_patterns,[i for i in range(len(good_patterns))], [max(counts)], [(electrode_list,data_on_cells)]))
+            results = pool.starmap(run_movie, product([cell], good_patterns,[i for i in range(len(good_patterns))], [max(counts)], [(electrode_list,data_on_cells,start_time_limit,end_time_limit,estim_analysis_path, noise)]))
+            
             ps = np.array([r[0] for r in results for i in range(len(r[1])) if len(r[1])>0]).astype(int)
             ks = np.array([i for r in results for i in r[1] if len(r[1])>0]).astype(int)
             cprobs = [i for r in results for i in r[2] if len(r[1])>0]
