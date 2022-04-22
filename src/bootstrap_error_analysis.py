@@ -6,13 +6,15 @@ import src.multielec_utils as mutils
 import re 
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+from src.old_labview_data_reader import *
+import src.utilities.visionloader as vl
 
-def get_bootstrap_information(ANALYSIS_BASE, gsort_path,dataset, estim, wnoise, p, n):
+def get_bootstrap_information(ANALYSIS_BASE, gsort_path,dataset, estim, wnoise, p, n, electrodes_stored = True):
     electrical_path = os.path.join(ANALYSIS_BASE, dataset, estim)
     filepath = os.path.join(gsort_path, 
                             dataset, estim, wnoise, "p" + str(p))
 
-    relevant_movies = [f for f in os.listdir(filepath) if f"_n{n}_" in f]
+    relevant_movies = [f for f in os.listdir(filepath) if f"_n{n}_" in f and "residual" not in f]
     num_movies = len(relevant_movies)
 
     total_probs = np.zeros(num_movies)
@@ -28,7 +30,7 @@ def get_bootstrap_information(ANALYSIS_BASE, gsort_path,dataset, estim, wnoise, 
         if total_probs[k]>0:
             edge_probs+=[prob_dict['edge_probs']]
         else:
-            edge_probs+=[0]
+            edge_probs+=[np.array([0])]
         clusters += [prob_dict['initial_clustering_with_virtual']]
 
         edge_set = []
@@ -36,16 +38,29 @@ def get_bootstrap_information(ANALYSIS_BASE, gsort_path,dataset, estim, wnoise, 
             if c == n:
                 edge_set += [e]
         edges += [edge_set]
-    return relevant_movies, total_probs, edge_probs, clusters, edges
+    if electrodes_stored:
+        electrodes = prob_dict['electrode_list']
+    return relevant_movies, total_probs, edge_probs, clusters, edges, 0
+
+
+
+
+def get_movies_indices(relevant_movies):
+    return [int(re.findall('\d+', m)[-1]) for m in relevant_movies]
+    
+def get_sorted_movies_filenames(relevant_movies):
+    movies = get_movies_indices(relevant_movies)
+    movie_sorting = np.argsort(movies)
+    return list(np.array(relevant_movies)[movie_sorting]), movie_sorting
+
 
 def make_surface_plot(relevant_movies, total_probs, ANALYSIS_BASE,dataset, estim, p, n):
     electrical_path = os.path.join(ANALYSIS_BASE, dataset, estim)
     
     triplet_elecs = mutils.get_stim_elecs_newlv(electrical_path, p)
     amplitudes = mutils.get_stim_amps_newlv(electrical_path, p)
-
-    movies = [int(re.findall('\d+', m)[-1]) for m in relevant_movies]
-    movie_sorting = np.argsort(movies)
+    _, movie_sorting = get_sorted_movies_filenames(relevant_movies)
+    
     sorted_probs = total_probs[movie_sorting]
 
     p_thr = 2/19
@@ -65,4 +80,147 @@ def make_surface_plot(relevant_movies, total_probs, ANALYSIS_BASE,dataset, estim
     ax.set_title(f"n={n}, p={p}")
     clb = plt.colorbar(scat)
     clb.set_label('Activation Probability')
+    plt.show()
+
+def make_lollipop_comparison_plot(relevant_movies, total_probs, new_total_probs, ANALYSIS_BASE,dataset, estim, p, n):
+    electrical_path = os.path.join(ANALYSIS_BASE, dataset, estim)
+    
+    amplitudes = mutils.get_stim_amps_newlv(electrical_path, p)
+    _, movie_sorting = get_sorted_movies_filenames(relevant_movies)
+    
+    sorted_probs = total_probs[movie_sorting]
+    sorted_new_probs = new_total_probs[movie_sorting]
+   
+
+    fig = plt.figure()
+    
+    ax = plt.subplot(211)
+
+    ax.plot(-amplitudes[:,0], sorted_probs,"-o")
+    ax.plot(-amplitudes[:,0], sorted_new_probs,"-o")
+
+    ax.set_ylim([0,1])
+
+    ax = plt.subplot(212)
+    ax.plot(sorted_probs,"-o")
+    ax.plot(sorted_new_probs,"-o")
+    ax.set_ylim([0,1])
+    plt.show()
+
+def get_difference_signals(relevant_movies,clusters,edges,ANALYSIS_BASE, dataset, estim,p, electrodes):
+    electrical_path = os.path.join(ANALYSIS_BASE, dataset, estim)
+    
+    movies = get_movies_indices(relevant_movies)
+    all_ds = []
+    all_ds_stack =  []
+    count =  0
+    movie_stack = []
+    num_electrodes = 0
+    num_samples = 0 
+    for kk, k in enumerate(tqdm.tqdm(movies)):
+        
+        edge_ds = []
+        if len(edges[kk]):
+            signal = get_oldlabview_pp_data(electrical_path, p, k)[:,electrodes,:55]
+            _, num_electrodes, num_samples = signal.shape
+
+        for e in edges[kk]:
+            X = signal[clusters[kk]==e[0]]
+            Y = signal[clusters[kk]==e[1]]
+            ds = Y[:,None,:,:] - X[None,:,:,:]
+            ds = ds.reshape((len(X) * len(Y), len(electrodes), -1))
+            movie_stack += [k] * (len(X) * len(Y))
+            edge_ds += [ds]
+            count += 1
+        all_ds += [edge_ds]
+        all_ds_stack += edge_ds 
+    all_ds_stack = np.vstack(all_ds_stack)
+    return all_ds, all_ds_stack, num_electrodes, num_samples, movie_stack
+
+def compute_average_diff_signal_and_error(dss,dss_stack, num_electrodes, num_samples):
+    latencies = np.argmin(dss_stack, axis = 2)
+    avg_latency = np.median(latencies, axis = 0)
+    latency_deviation = latencies-avg_latency
+    
+    start_j = np.maximum(latency_deviation, 0).astype(int)
+    start_i = np.maximum(-latency_deviation, 0).astype(int)
+    end_j = np.minimum(55+latency_deviation, 55).astype(int)
+    end_i = np.minimum(55-latency_deviation, 55).astype(int)
+
+
+    shifted_dss_stack = np.zeros_like(dss_stack)
+    best_error_stack = np.zeros(len(dss_stack))
+    worst_error_stack = np.zeros(len(dss_stack))
+    for i, es in enumerate(dss_stack):
+        for e, s in enumerate(es):
+            shifted_dss_stack[i, e, start_i[i,e]:end_i[i,e]] = dss_stack[i, e, start_j[i,e]:end_j[i,e]]
+    
+    average_ds = np.mean(shifted_dss_stack, axis = 0)
+    error_stack  = np.linalg.norm(shifted_dss_stack - average_ds[None], axis = 2)
+    average_error = np.mean(error_stack, axis = 0)
+    std_error= np.std(error_stack, axis = 0)
+    
+    
+    count = 0
+    shifted_dss = []
+    error = []
+    for i in dss:
+        edge_ds = []
+        edge_error = []
+        for j in i:
+            tmp_shifted_array = []
+            tmp_error_array = []
+            for k in j:
+                tmp_shifted_array += [shifted_dss_stack[count]]
+                tmp_error_array += [error_stack[count]]
+                count += 1
+            edge_ds += [np.vstack(tmp_shifted_array)]
+            edge_error += [np.array(tmp_error_array)]
+        shifted_dss += [edge_ds]
+        error += [edge_error]
+        
+    return average_ds, average_error,std_error, shifted_dss, shifted_dss_stack,error, error_stack
+
+
+def get_mean_edge_error(error):
+    mean_edge_error = []
+    for i in error:
+        tmp_mean_error = []
+        for j in i:
+            tmp_mean_error += [np.mean(j, axis = 0 )]
+        mean_edge_error += [tmp_mean_error]
+    return mean_edge_error
+
+
+def get_modified_edge_probs(mean_edge_error, edge_probs, average_error, std_error, factor, test_set):
+    new_edge_probs = []
+    test_set = np.array(test_set)
+    for i1, i2 in zip(mean_edge_error, edge_probs):
+        tmp_edge_probs = []
+        if not len(i1):
+            tmp_edge_probs += [0]
+        for j1, j2 in zip(i1,i2):
+            tmp_prob = 0
+            if np.all(j1[test_set] < average_error[test_set] -factor * std_error[test_set]) :
+                tmp_prob = j2
+            tmp_edge_probs+=[tmp_prob]
+        new_edge_probs+= [np.array(tmp_edge_probs)]
+    return new_edge_probs
+
+
+def plot_spike_split_on_electrode(shifted_dss_stack,average_ds, error_stack,average_error, std_error, factor,electrode , test_set):
+    test_set = np.array(test_set)
+    plt.figure()
+    ax = plt.subplot(212)
+    ax.plot(shifted_dss_stack[ ~np.all(error_stack[:,test_set]<= (average_error[test_set]+factor*std_error[test_set]), axis = 1),electrode,:].T, color = "C0")
+
+    ax.plot(average_ds[electrode,:].T, color = "C1")
+    ax.set_title("Bad spikes")
+    ax = plt.subplot(211)
+    ax.plot(shifted_dss_stack[ np.all(error_stack[:,test_set]<=  (average_error[test_set]+factor*std_error[test_set]), axis = 1),electrode,:].T, color = "C0")
+    ax.plot(average_ds[electrode,:].T, color = "C1")
+
+    ax.set_title("Good spikes")
+    per_good_spikes = np.mean(np.all(error_stack[:,test_set]<= (average_error[test_set]+factor*std_error[test_set]), axis = 1))
+    plt.suptitle(f"% good spikes = {per_good_spikes}")
     plt.show()
