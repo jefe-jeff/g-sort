@@ -39,7 +39,7 @@ from typing import List, Tuple
 
 def run_movie(n, p, pi, ks, preloaded_data):
     
-    electrode_list, data_on_cells, start_time_limit, end_time_limit, estim_analysis_path, noise = preloaded_data
+    electrode_list, data_on_cells, start_time_limit, end_time_limit, estim_analysis_path, noise, outpath = preloaded_data
 
     shift_window=[start_time_limit, end_time_limit]
     
@@ -82,17 +82,42 @@ def run_movie(n, p, pi, ks, preloaded_data):
         signal_index = np.argwhere([k[1] ==n for k in  graph_signal.keys()]).flatten()
         g_signal_error = 0
         clustering = event_labels_with_virtual
+        p_to_cell = {}
         if len(signal_index) != 0:
 
             edges = np.array([list(graph_signal.keys())[k][0] for k in signal_index])  
             low_power = [np.sum(mask*graph_signal[list(graph_signal.keys())[k]][0]*graph_signal[list(graph_signal.keys())[k]][1])/np.sqrt(np.sum(graph_signal[list(graph_signal.keys())[k]][1]**2))/np.sqrt(np.sum(mask*graph_signal[list(graph_signal.keys())[k]][0]**2))<=cosine_similarity for k in signal_index]
+            low_power_value = np.array([np.sum(mask*graph_signal[list(graph_signal.keys())[k]][0]*graph_signal[list(graph_signal.keys())[k]][1])/np.sqrt(np.sum(graph_signal[list(graph_signal.keys())[k]][1]**2))/np.sqrt(np.sum(mask*graph_signal[list(graph_signal.keys())[k]][0]**2)) for k in signal_index])
+            correlation = np.array([np.sum( mask*(np.abs(graph_signal[list(graph_signal.keys())[k]][1])>1) )/np.sum(np.abs(cell_eis[cell_ids.index(n)])> 1) for k in signal_index])
+            
             g_signal_error += sum([sum(clustering == e[1])/len(clustering) for e in edges[low_power]])
             g_signal_error += sum([sum(clustering == n)/len(clustering) for e in edges[low_power] for n in nx.descendants(G, e[1])])
+
+            edge_dep_probs = np.array([sum(clustering == e[1])/len(clustering) for e in edges])
+            edge_dep_probs += np.array([ sum([sum(clustering == n)/len(clustering) for n in nx.descendants(G, e[1])]) for e in edges ])
             cosine_probs += [total_p[n]-g_signal_error]
+
+            p_to_cell['cosine_prob'] = (total_p[n]-g_signal_error, cosine_similarity)
+            p_to_cell['edge_probs'] = edge_dep_probs
+            p_to_cell['non_saturated_template'] = correlation
+            p_to_cell['data_similarity'] = low_power_value
+
         else:
             cosine_probs += [total_p[n]]
+            p_to_cell['cosine_prob'] = (total_p[n], cosine_similarity)
+    
+        p_to_cell['electrode_list'] = electrode_list    
+        p_to_cell['prob'] = total_p[n]    
    
         probs += [total_p[n]]
+
+
+        p_to_cell['clustering'] = event_labels_with_virtual
+        p_to_cell['graph_info'] = (list(G.nodes), list(G.edges), nx.get_edge_attributes(G, 'cell'))
+        p_to_cell['num_trials'] = len(signal)
+        p_to_cell['note'] = note
+        with open(os.path.join(outpath, 'gsort_info_n' + str(n)+ '_p' + str(p) +'_k'+str(k)+'.pkl'), 'wb') as f:
+                pickle.dump(p_to_cell, f)
 
     return ( pi, [i for i in range(len(probs))], cosine_probs, probs)
 
@@ -1949,6 +1974,18 @@ def resort_clusters_by_noise(electrode_list, signals, event_labels_tmp,  mask, s
 
     return new_event_labels
 
+def get_significant_electrodes(ei, compartments, noise, cell_spike_window = 25, max_electrodes_considered = 30, rat = 2):
+    cell_power = ei**2
+    e_sorted = np.argsort(np.sum(ei**2, axis = 1))[::-1]
+    e_sorted = [e for e in e_sorted if eil.axonorsomaRatio(ei[e,:]) in compartments]
+    cell_power = ei**2
+    power_ordering = np.argsort(cell_power, axis = 1)[:,::-1]
+    significant_electrodes = np.argwhere(np.sum(np.take_along_axis(cell_power[e_sorted], power_ordering[e_sorted,:cell_spike_window], axis = 1), axis = 1) >= rat * cell_spike_window * np.array(noise[e_sorted])**2).flatten()
+
+    electrode_list = list(np.array(e_sorted)[significant_electrodes][:max_electrodes_considered])
+    return electrode_list
+            
+
 def get_probabilities(G, event_labels, num_trials = None):
     G_mod = G.copy()
     for n in [n for n in G_mod.nodes if G_mod.in_degree(n) > 1]:
@@ -1977,3 +2014,16 @@ def get_probabilities(G, event_labels, num_trials = None):
 
 
 
+def get_vision_data(ANALYSIS_BASE, dataset, wnoise):
+    vis_datapath = os.path.join(ANALYSIS_BASE, dataset, wnoise)
+    vis_datarun = wnoise.split('/')[-1]
+    vcd = vl.load_vision_data(
+        vis_datapath,
+        vis_datarun,
+        include_neurons=True,
+        include_ei=True,
+        include_params=True,
+        include_noise=True,
+    )
+
+    return vcd

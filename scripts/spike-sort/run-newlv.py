@@ -36,6 +36,7 @@ parser.add_argument('-f', '--file', type=str, help="List of piece-electrode-cell
 parser.add_argument('-sm', '--small', help="Save subset of data", action="store_true")
 parser.add_argument('-ov', '--overwrite', help="Overwrite pickle files", action="store_true")
 parser.add_argument('-sasi', '--sasi', help="Exclude crap in all considerations", action="store_true")
+parser.add_argument('-sc', '--specific_cell', type=int, help='Cell id number.')
 
 args = parser.parse_args()
 dataset = args.dataset
@@ -85,6 +86,12 @@ if args.compartments is not None:
     compartments = args.compartments
 else:
     compartments = ['soma', 'mixed']
+
+if args.specific_cell is not None:
+    specific_cell = arg.specific_cell 
+else:
+    specific_cell = None
+
 
 ANALYSIS_BASE = '/Volumes/Analysis'
 vstim_analysis_path = os.path.join(ANALYSIS_BASE, dataset, vstim_datarun)
@@ -250,6 +257,11 @@ if __name__ == "__main__":
     for type_ in cell_types:
         print("Running for cell type %s" %type_)
         for cell in tqdm.tqdm(vstim_data.get_all_cells_similar_to_type(type_)):
+
+            if specific_cell is not None:
+                if cell != specific_cell:
+                    continue
+
             cell_ind = cellids.index(cell)
 
             good_inds, EI = get_collapsed_ei_thr(cell, noise_thresh)
@@ -293,7 +305,7 @@ if __name__ == "__main__":
             logging.info('electrodes considered: ' + str(np.array(electrode_list) + 1))
             logging.info('patterns considered: ' + str(patterns_of_interest))
 
-            results = pool.starmap(run_movie, product([cell], patterns_of_interest,[i for i in range(len(patterns_of_interest))], [max(num_amps)], [(electrode_list,data_on_cells,start_time_limit,end_time_limit,estim_analysis_path, noise)]))
+            results = pool.starmap(run_movie, product([cell], patterns_of_interest,[i for i in range(len(patterns_of_interest))], [max(num_amps)], [(electrode_list,data_on_cells,start_time_limit,end_time_limit,estim_analysis_path, noise, outpath)]))
             ps = np.array([r[0] for r in results for i in range(len(r[1])) if len(r[1])>0]).astype(int)
             ks = np.array([i for r in results for i in r[1] if len(r[1])>0]).astype(int)
             cprobs = [i for r in results for i in r[2] if len(r[1])>0]
