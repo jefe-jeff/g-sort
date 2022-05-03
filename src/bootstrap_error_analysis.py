@@ -13,44 +13,48 @@ def get_bootstrap_information(ANALYSIS_BASE, gsort_path,dataset, estim, wnoise, 
     electrical_path = os.path.join(ANALYSIS_BASE, dataset, estim)
     relevant_movies = []
     relevant_paths = []
+    filepath = os.path.join(gsort_path, dataset, estim, wnoise)
     for p in ps:
-        filepath = os.path.join(gsort_path, 
-                                dataset, estim, wnoise, "p" + str(p))
+        # filepath = os.path.join(gsort_path, 
+        #                         dataset, estim, wnoise, "p" + str(p))
+      
 
-        relevant_movies += [f for f in os.listdir(filepath) if f"_n{n}_" in f and "residual" not in f]
-        relevant_paths += [filepath for f in os.listdir(filepath) if f"_n{n}_" in f and "residual" not in f]
-    
-    num_movies = len(relevant_movies)
+        relevant_movies += [f for f in os.listdir(filepath) if (f"_p{p}.pkl" in f) and (f"_n{n}_" in f)]
+    num_movies = 0
 
-    total_probs = np.zeros(num_movies)
+    total_probs = []
     edge_probs = []
     clusters = []
     edges = []
     num_trials = []
     electrodes = []
-    for k, (filepath, movie) in enumerate(tqdm.tqdm(zip(relevant_paths,relevant_movies))):
-        with open(os.path.join(filepath,movie), "rb") as f:
+    pattern_movies = []
+    
+    for p, cell_pattern in tqdm.tqdm(zip(ps, relevant_movies)):
+        with open(os.path.join(filepath,cell_pattern), "rb") as f:
             prob_dict = pickle.load(f)
+        for k in sorted(prob_dict.keys()):
+            
+            pattern_movies += [(p,k)]
+            total_probs += [prob_dict[k]["cosine_prob"][0]]
+            if 'edge_probs' in prob_dict[k].keys():
+                edge_probs+=[prob_dict[k]['edge_probs']]
+            else:
+                edge_probs+=[np.array([0])]
+            clusters += [prob_dict[k]['clustering']]
 
-        
-        total_probs[k] = prob_dict["cosine_prob"][0]
-        if total_probs[k]>0:
-            edge_probs+=[prob_dict['edge_probs']]
-        else:
-            edge_probs+=[np.array([0])]
-        clusters += [prob_dict['initial_clustering_with_virtual']]
+            edge_set = []
+            for e,c in prob_dict[k]['graph_info'][2].items():
+                if c == n:
+                    edge_set += [e]
+            edges += [edge_set]
 
-        edge_set = []
-        for e,c in prob_dict['graph_info'][2].items():
-            if c == n:
-                edge_set += [e]
-        edges += [edge_set]
-
-        num_trials += [prob_dict["num_trials"]]
+            num_trials += [prob_dict[k]["num_trials"]]
    
-    if electrodes_stored:
-        electrodes = prob_dict['electrode_list']
-    return relevant_movies, total_probs, edge_probs, clusters, edges, electrodes, num_trials
+            if electrodes_stored:
+                electrodes = prob_dict[k]['electrode_list']
+    total_probs = np.array(total_probs)
+    return pattern_movies, total_probs, edge_probs, clusters, edges, electrodes, num_trials
 
 
 
@@ -95,6 +99,8 @@ def make_surface_plot(relevant_movies, total_probs, ANALYSIS_BASE,dataset, estim
     clb.set_label('Activation Probability')
     plt.show()
 
+
+
 def make_lollipop_comparison_plot(all_relevant_movies, all_total_probs, all_new_total_probs, all_new_instance_probs, ANALYSIS_BASE,dataset, estim):
     pattern_movies_indices = np.array(get_pattern_movies_indices(all_relevant_movies))
     for p in set(pattern_movies_indices[:,0]):
@@ -131,10 +137,45 @@ def make_lollipop_comparison_plot(all_relevant_movies, all_total_probs, all_new_
       
         plt.show()
 
-def get_difference_signals(relevant_movies,clusters,edges,ANALYSIS_BASE, dataset, estim, electrodes):
+def plot_sigmoid(p, all_relevant_movies, all_total_probs, all_new_total_probs, all_new_instance_probs, ANALYSIS_BASE,dataset, estim):
+    pattern_movies_indices = np.array(get_pattern_movies_indices(all_relevant_movies))
+    
+    sel = np.argwhere(pattern_movies_indices[:,0]== p).flatten()
+    relevant_movies  = [all_relevant_movies[i] for i in sel]
+    total_probs = all_total_probs[sel]
+    new_total_probs = all_new_total_probs[sel]
+    new_instance_probs = all_new_instance_probs[sel]
+
     electrical_path = os.path.join(ANALYSIS_BASE, dataset, estim)
     
-    pattern_movies = get_pattern_movies_indices(relevant_movies)
+    amplitudes = mutils.get_stim_amps_newlv(electrical_path, p)
+    _, movie_sorting = get_sorted_movies_filenames(relevant_movies)
+    
+    sorted_probs = total_probs[movie_sorting]
+    sorted_new_probs = new_total_probs[movie_sorting]
+    sorted_instance_probs = new_instance_probs[movie_sorting]
+
+
+    fig = plt.figure()
+    
+    ax = plt.subplot(211)
+    ax.set_title(f"p={p}")
+    ax.plot(-amplitudes[:,0], sorted_probs,"-o")
+    ax.plot(-amplitudes[:,0], sorted_new_probs,"-o")
+    ax.plot(-amplitudes[:,0], sorted_instance_probs,"-o")
+    ax.set_ylim([0,1])
+
+    ax = plt.subplot(212)
+    ax.plot(sorted_probs,"-o")
+    ax.plot(sorted_new_probs,"-o")
+    ax.plot(sorted_instance_probs,"-o")
+    ax.set_ylim([0,1])
+    
+    plt.show()
+
+def get_difference_signals(pattern_movies,clusters,edges,ANALYSIS_BASE, dataset, estim, electrodes):
+    electrical_path = os.path.join(ANALYSIS_BASE, dataset, estim)
+    
     all_ds = []
     all_ds_inds = []
     all_ds_stack =  []
@@ -188,10 +229,13 @@ def compute_average_diff_signal_and_error(dss,dss_stack, num_electrodes, num_sam
     worst_error_stack = np.zeros(len(dss_stack))
     for i, es in enumerate(dss_stack):
         for e, s in enumerate(es):
-            shifted_dss_stack[i, e, start_i[i,e]:end_i[i,e]] = dss_stack[i, e, start_j[i,e]:end_j[i,e]]
+            # shifted_dss_stack[i, e, start_i[i,e]:end_i[i,e]] = dss_stack[i, e, start_j[i,e]:end_j[i,e]]
+            shifted_dss_stack[i, e, :] = np.roll(dss_stack[i, e], -int(latency_deviation[i,e]))#[:end_j[i,e]-start_j[i,e]]
     
     average_ds = np.mean(shifted_dss_stack, axis = 0)
     error_stack  = np.linalg.norm(shifted_dss_stack - average_ds[None], axis = 2)
+    # error_stack  = np.max(shifted_dss_stack - average_ds[None], axis = 2)
+    
     average_error = np.mean(error_stack, axis = 0)
     std_error= np.std(error_stack, axis = 0)
     
@@ -206,7 +250,7 @@ def compute_average_diff_signal_and_error(dss,dss_stack, num_electrodes, num_sam
             tmp_shifted_array = []
             tmp_error_array = []
             for k in j:
-                tmp_shifted_array += [shifted_dss_stack[count]]
+                tmp_shifted_array += [shifted_dss_stack[count][None]]
                 tmp_error_array += [error_stack[count]]
                 count += 1
             edge_ds += [np.vstack(tmp_shifted_array)]
@@ -261,8 +305,8 @@ def plot_spike_split_on_electrode(shifted_dss_stack,average_ds, error_stack,aver
     plt.show()
 
 def get_instance_modified_edge_probs(edge_probs, error, dss_inds, average_error, std_error, factor, test_set, num_trials):
-    good_trials = []
-    modified_net_nodes = []
+    good_nodes = []
+    net_nodes = []
     test_set = np.array(test_set)
     for i1, i3 in zip(error, dss_inds):
         i4 = []
@@ -272,7 +316,8 @@ def get_instance_modified_edge_probs(edge_probs, error, dss_inds, average_error,
             j5 = []
             for k1, k3 in zip(j1, j3):
                 k4 = []
-                
+                # print("k1", k1[test_set])
+                # print("avg_error", average_error[test_set])
                 if np.all(k1[test_set] < average_error[test_set] +factor * std_error[test_set]) :
                     
                     k4 += [k3[0]]
@@ -281,14 +326,64 @@ def get_instance_modified_edge_probs(edge_probs, error, dss_inds, average_error,
             i4 += [len(list(set(j4)))]
             i5 += [len(list(set(j5)))]
         
-        good_trials += [i4]
-        modified_net_nodes += [i5]
-    modified_prob = np.zeros(len(good_trials))
+        net_nodes += [i4]
+        good_nodes += [i5]
+    modified_prob = np.zeros(len(good_nodes))
 
 
-    for ii, (i1, i2, i3) in enumerate(zip(edge_probs, good_trials, modified_net_nodes)):
-       
+    for ii, (i1, i2, i3) in enumerate(zip(edge_probs, good_nodes, net_nodes)):
+        all_bad_assignments = True
         for j1, j2, j3 in zip(i1, i2, i3 ):
-            modified_prob[ii] += j1 - (j2 - j1)/num_trials[ii] if j2 else 0
-        
+            modified_prob[ii] += j1 - (j2 - j3)/num_trials[ii] if j3 else 0
     return modified_prob
+
+def make_dss_comparison(p, average_ds, dss, all_relevant_movies, all_total_probs, all_new_total_probs, all_new_instance_probs, ANALYSIS_BASE,dataset, estim,error, average_error, std_error, factor, test_set):
+    pattern_movies_indices = np.array(get_pattern_movies_indices(all_relevant_movies))
+    sel = np.argwhere(pattern_movies_indices[:,0]== p).flatten()
+    relevant_movies  = [all_relevant_movies[i] for i in sel]
+
+    total_probs = all_total_probs[sel]
+    new_total_probs = all_new_total_probs[sel]
+    new_instance_probs = all_new_instance_probs[sel]
+
+    electrical_path = os.path.join(ANALYSIS_BASE, dataset, estim)
+    
+    amplitudes = mutils.get_stim_amps_newlv(electrical_path, p)
+    _, movie_sorting = get_sorted_movies_filenames(relevant_movies)
+    
+    sorted_probs = total_probs[movie_sorting]
+    sorted_new_probs = new_total_probs[movie_sorting]
+    sorted_instance_probs = new_instance_probs[movie_sorting]
+
+
+    fig = plt.figure()
+    
+    ax = plt.subplot(211)
+    ax.set_title(f"p={p}")
+    ax.plot(-amplitudes[:,0], sorted_probs,"-o")
+    ax.plot(-amplitudes[:,0], sorted_new_probs,"-o")
+    ax.plot(-amplitudes[:,0], sorted_instance_probs,"-o")
+    ax.set_ylim([0,1])
+
+    ax = plt.subplot(212)
+    ax.plot(sorted_probs,"-o")
+    ax.plot(sorted_new_probs,"-o")
+    ax.plot(sorted_instance_probs,"-o")
+    ax.set_ylim([0,1])
+    
+    for ss, s in enumerate(sel[movie_sorting]):
+        fig = plt.figure()
+        ax = plt.subplot(211)
+        ax2 = plt.subplot(212)
+        ax.set_title(f"k={ss}")
+        
+        for dsds, ds in enumerate(dss[s]):
+            for ds_sds_s, ds_s in enumerate(ds):
+                if np.all(error[s][dsds][ds_sds_s][test_set] < average_error[test_set] +factor * std_error[test_set]) :
+                    ax.plot(ds_s.flatten(), color = f"C{dsds}" )
+                else:
+                    ax2.plot(ds_s.flatten(), color = f"C{dsds}")
+        ax.plot(average_ds.flatten(), color = "black")
+        ax2.plot(average_ds.flatten(), color = "black")
+
+    plt.show()
