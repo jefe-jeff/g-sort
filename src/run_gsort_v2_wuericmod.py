@@ -38,7 +38,7 @@ from typing import List, Tuple
 
 def run_movie(n, p, ks, preloaded_data):
     
-    cell_to_electrode_list, electrode_list, data_on_cells, start_time_limit, end_time_limit, estim_analysis_path, noise, outpath = preloaded_data
+    mutual_cells, cell_to_electrode_list, electrode_list, data_on_cells, start_time_limit, end_time_limit, estim_analysis_path, noise, outpath = preloaded_data
 
     shift_window=[start_time_limit, end_time_limit]
     
@@ -58,7 +58,7 @@ def run_movie(n, p, ks, preloaded_data):
     cell_ids, cell_eis, cell_error, cell_spk_times = data_on_cells
     significant_electrodes = np.arange(len(electrode_list))
     
-
+    run_info = {}
     for k in range(ks):
     
         try:
@@ -86,7 +86,7 @@ def run_movie(n, p, ks, preloaded_data):
         signal_index = np.argwhere([k[1] ==n for k in  graph_signal.keys()]).flatten()
         g_signal_error = 0
         clustering = event_labels_with_virtual
-        p_to_cell = {}
+        run_info[k] = {}
         if len(signal_index) != 0:
 
             edges = np.array([list(graph_signal.keys())[k][0] for k in signal_index])  
@@ -101,27 +101,28 @@ def run_movie(n, p, ks, preloaded_data):
             edge_dep_probs += np.array([ sum([sum(clustering == n)/len(clustering) for n in nx.descendants(G, e[1])]) for e in edges ])
             cosine_probs += [total_p[n]-g_signal_error]
 
-            p_to_cell['cosine_prob'] = (total_p[n]-g_signal_error, cosine_similarity)
-            p_to_cell['edge_probs'] = edge_dep_probs
-            p_to_cell['non_saturated_template'] = correlation
-            p_to_cell['data_similarity'] = low_power_value
+            run_info[k]['cosine_prob'] = (total_p[n]-g_signal_error, cosine_similarity)
+            run_info[k]['edge_probs'] = edge_dep_probs
+            run_info[k]['non_saturated_template'] = correlation
+            run_info[k]['data_similarity'] = low_power_value
 
         else:
             cosine_probs += [total_p[n]]
-            p_to_cell['cosine_prob'] = (total_p[n], cosine_similarity)
+            run_info[k]['cosine_prob'] = (total_p[n], cosine_similarity)
     
-        p_to_cell['electrode_list'] = electrode_list    
-        p_to_cell['prob'] = total_p[n]    
+        run_info[k]['electrode_list'] = electrode_list    
+        run_info[k]['prob'] = total_p[n]    
    
         probs += [total_p[n]]
 
 
-        p_to_cell['clustering'] = event_labels_with_virtual
-        p_to_cell['graph_info'] = (list(G.nodes), list(G.edges), nx.get_edge_attributes(G, 'cell'))
-        p_to_cell['num_trials'] = len(signal)
-        p_to_cell['note'] = note
-        with open(os.path.join(outpath, 'gsort_info_n' + str(n)+ '_p' + str(p) +'_k'+str(k)+'.pkl'), 'wb') as f:
-                pickle.dump(p_to_cell, f)
+        run_info[k]['clustering'] = event_labels_with_virtual
+        run_info[k]['graph_info'] = (list(G.nodes), list(G.edges), nx.get_edge_attributes(G, 'cell'))
+        run_info[k]['num_trials'] = len(signal)
+        run_info[k]['mutual_cells'] = mutual_cells
+        run_info[k]['note'] = note
+    with open(os.path.join(outpath, 'gsort_info_n' + str(n)+ '_p' + str(p) +'.pkl'), 'wb') as f:
+            pickle.dump(run_info, f)
 
     return ( p, [i for i in range(len(probs))], cosine_probs, probs)
 
