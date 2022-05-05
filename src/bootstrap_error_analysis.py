@@ -18,10 +18,8 @@ def get_bootstrap_information(ANALYSIS_BASE, gsort_path,dataset, estim, wnoise, 
         # filepath = os.path.join(gsort_path, 
         #                         dataset, estim, wnoise, "p" + str(p))
       
-
         relevant_movies += [f for f in os.listdir(filepath) if (f"_p{p}.pkl" in f) and (f"_n{n}_" in f)]
     num_movies = 0
-
     total_probs = []
     edge_probs = []
     clusters = []
