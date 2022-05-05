@@ -33,6 +33,7 @@ parser.add_argument('-a', '--all', help="Run gsort on all cell types.", action="
 parser.add_argument('-ov', '--overwrite', help="Overwrite pickle files", action="store_true")
 parser.add_argument('-sasi', '--sasi', help="Exclude crap in all considerations", action="store_true")
 parser.add_argument('-sc', '--specific_cell', type=int, help='Cell id number.')
+parser.add_argument('-mt', '--mutual_threshold', type=float, help="Overlap threshold for cells to be considered together")
 args = parser.parse_args()
 
 dataset = args.dataset
@@ -80,6 +81,11 @@ if args.compartments is not None:
 else:
     compartments = ['soma', 'mixed']
 
+if args.mutual_threshold is not None:
+    mutual_threshold = args.mutual_threshold
+else:
+    mutual_threshold = 0.5
+
 if args.specific_cell is not None:
     specific_cell = arg.specific_cell 
 else:
@@ -109,63 +115,11 @@ if all_types:
         else:
             cell_types.append(type_)
 
-MIN_CORR = .975
-duplicates = set()
-cellids = vstim_data.get_cell_ids()
-for cell in cellids:
-    cell_ei = vstim_data.get_ei_for_cell(cell).ei
-    cell_ei_error = vstim_data.get_ei_for_cell(cell).ei_error
-    cell_ei_max = np.abs(np.amin(cell_ei,axis=1))
-    cell_ei_power = np.sum(cell_ei**2,axis=1)
-    celltype = vstim_data.get_cell_type_for_cell(cell).lower()
-    if "dup" in celltype or "bad" in celltype:
-        continue 
-    if "parasol" in celltype:
-        celltype = 'parasol'
-    elif "midget" in celltype:
-        celltype = 'midget'
-    elif "sbc" in celltype:
-        celltype = 'sbc'
-    else:
-        celltype = 'other'
-    for other_cell in cellids:
-        other_celltype = vstim_data.get_cell_type_for_cell(other_cell).lower()
-        if cell == other_cell or cell in duplicates or other_cell in duplicates:
-            continue
-        if "dup" in other_celltype or "bad" in other_celltype:
-            continue
-        if "parasol" in other_celltype:
-            other_celltype = 'parasol'
-        elif "midget" in other_celltype:
-            other_celltype = 'midget'
-        elif "sbc" in other_celltype:
-            other_celltype = 'sbc'
-        else:
-            other_celltype = 'other'
-        # Quit out if both cell types are in the big five.
-        if celltype in ['parasol','midget','sbc'] and other_celltype in ['parasol','midget','sbc']:
-            continue
-        other_cell_ei = vstim_data.get_ei_for_cell(other_cell).ei
-        other_cell_ei_max = np.abs(np.amin(other_cell_ei,axis=1))
-        other_cell_ei_power = np.sum(other_cell_ei**2,axis=1)
-        # Compute the correlation and figure out if we have duplicates: take the larger number of spikes.
-        corr = np.corrcoef(cell_ei_power,other_cell_ei_power)[0,1]
-        if corr >= MIN_CORR:
-            n_spikes_cell = vstim_data.get_spike_times_for_cell(cell).shape[0]
-            n_spikes_other_cell = vstim_data.get_spike_times_for_cell(other_cell).shape[0]
-            # Take the larger number of spikes, unless the one with fewer is a light responsive type.
-            if celltype in ['parasol','midget','sbc'] or n_spikes_cell > n_spikes_other_cell:
-                duplicates.add(other_cell)
-            else:
-                duplicates.add(cell)
-                
 noise = vstim_data.channel_noise
 
-for cell in set(cellids).difference(duplicates):
-    cell_ei_error = vstim_data.get_ei_for_cell(cell).ei_error[noise != 0]
-    
-    if np.any(cell_ei_error == 0):
-        duplicates.add(cell)       
+duplicates, cell_ei = compute_duplicates(vstim_data, noise)  
+
+
 
 amplitudes = np.array([0.10053543, 0.11310236, 0.11938583, 0.13195276, 0.14451969,
                        0.16337008, 0.17593701, 0.1947874 , 0.2136378 , 0.23877165,
@@ -272,7 +226,7 @@ if __name__ == "__main__":
    
     outpath = os.path.join(filepath, dataset, estim_datarun, vstim_datarun)
 
-    total_electrode_list, total_cell_to_electrode_list, mutual_cells, array_id = get_cell_info(cell_types, vstim_data, compartments, noise)
+    total_electrode_list, total_cell_to_electrode_list, mutual_cells, array_id = get_cell_info(cell_types, vstim_data, compartments, noise, mutual_threshold=mutual_threshold)
 
     for type_ in cell_types:
         print("Running for cell type %s" %type_)
@@ -290,6 +244,7 @@ if __name__ == "__main__":
                 for i in range(len(stim_elecs)):
                     if np.any(np.in1d(stim_elecs[i], relevant_patterns + 1)):
                         good_inds.append(patterns[i])
+                good_inds = np.array(good_inds)
             else:
                 assert 1==0, "Specify new or oldlv data"
             
@@ -312,7 +267,7 @@ if __name__ == "__main__":
             logging.info('electrodes considered: ' + str(np.array(electrode_list) + 1))
             logging.info('patterns considered: ' + str(good_patterns))
             
-            results = pool.starmap(run_movie, product([cell], good_patterns, [max(counts)], [(cell_to_electrode_list, electrode_list,data_on_cells,start_time_limit,end_time_limit,estim_analysis_path, noise,outpath)]))
+            results = pool.starmap(run_movie, product([cell], good_patterns, [NUM_AMPS], [( (mutual_cells[cell],mutual_threshold), cell_to_electrode_list, electrode_list,data_on_cells,start_time_limit,end_time_limit,estim_analysis_path, noise,outpath)]))
             
             ps = np.array([r[0]-1 for r in results for i in range(len(r[1])) if len(r[1])>0]).astype(int)
             ks = np.array([i for r in results for i in r[1] if len(r[1])>0]).astype(int)
