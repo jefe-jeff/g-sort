@@ -60,7 +60,7 @@ def run_movie(n, p, ks, preloaded_data):
     
     run_info = {}
     for k in range(ks):
-    
+        # print('k',k)
         try:
             signal = get_oldlabview_pp_data(estim_analysis_path , p, k)
         except:
@@ -1147,3 +1147,64 @@ def get_cell_info(cell_types, vstim_data, compartments, noise, mutual_threshold 
         
     
     return total_electrode_list, cell_to_electrode_list, mutual_cells, array_id
+
+
+def compute_duplicates(vstim_data, noise):
+    MIN_CORR = .975
+    duplicates = set()
+    cellids = vstim_data.get_cell_ids()
+    for cell in cellids:
+        cell_ei = vstim_data.get_ei_for_cell(cell).ei
+        cell_ei_error = vstim_data.get_ei_for_cell(cell).ei_error
+        cell_ei_max = np.abs(np.amin(cell_ei,axis=1))
+        cell_ei_power = np.sum(cell_ei**2,axis=1)
+        celltype = vstim_data.get_cell_type_for_cell(cell).lower()
+        if "dup" in celltype or "bad" in celltype:
+            continue 
+        if "parasol" in celltype:
+            celltype = 'parasol'
+        elif "midget" in celltype:
+            celltype = 'midget'
+        elif "sbc" in celltype:
+            celltype = 'sbc'
+        else:
+            celltype = 'other'
+        for other_cell in cellids:
+            other_celltype = vstim_data.get_cell_type_for_cell(other_cell).lower()
+            if cell == other_cell or cell in duplicates or other_cell in duplicates:
+                continue
+            if "dup" in other_celltype or "bad" in other_celltype:
+                continue
+            if "parasol" in other_celltype:
+                other_celltype = 'parasol'
+            elif "midget" in other_celltype:
+                other_celltype = 'midget'
+            elif "sbc" in other_celltype:
+                other_celltype = 'sbc'
+            else:
+                other_celltype = 'other'
+            # Quit out if both cell types are in the big five.
+            if celltype in ['parasol','midget','sbc'] and other_celltype in ['parasol','midget','sbc']:
+                continue
+            other_cell_ei = vstim_data.get_ei_for_cell(other_cell).ei
+            other_cell_ei_max = np.abs(np.amin(other_cell_ei,axis=1))
+            other_cell_ei_power = np.sum(other_cell_ei**2,axis=1)
+            # Compute the correlation and figure out if we have duplicates: take the larger number of spikes.
+            corr = np.corrcoef(cell_ei_power,other_cell_ei_power)[0,1]
+            if corr >= MIN_CORR:
+                n_spikes_cell = vstim_data.get_spike_times_for_cell(cell).shape[0]
+                n_spikes_other_cell = vstim_data.get_spike_times_for_cell(other_cell).shape[0]
+                # Take the larger number of spikes, unless the one with fewer is a light responsive type.
+                if celltype in ['parasol','midget','sbc'] or n_spikes_cell > n_spikes_other_cell:
+                    duplicates.add(other_cell)
+                else:
+                    duplicates.add(cell)
+                    
+
+
+    for cell in set(cellids).difference(duplicates):
+        cell_ei_error = vstim_data.get_ei_for_cell(cell).ei_error[noise != 0]
+        
+        if np.any(cell_ei_error == 0):
+            duplicates.add(cell)     
+    return duplicates, cell_ei
