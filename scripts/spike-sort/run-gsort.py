@@ -1,9 +1,9 @@
 import os
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["OPENBLAS_NUM_THREADS"] = "1" 
-os.environ["MKL_NUM_THREADS"] = "1" 
-os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
-os.environ["NUMEXPR_NUM_THREADS"] = "1"
+os.environ["OMP_NUM_THREADS"] = "2"
+os.environ["OPENBLAS_NUM_THREADS"] = "2" 
+os.environ["MKL_NUM_THREADS"] = "2" 
+os.environ["VECLIB_MAXIMUM_THREADS"] = "2"
+os.environ["NUMEXPR_NUM_THREADS"] = "2"
 
 import sys
 
@@ -133,18 +133,8 @@ amplitudes = np.array([0.10053543, 0.11310236, 0.11938583, 0.13195276, 0.1445196
 cell_spike_window = 25
 rat = 2
 max_electrodes_considered = 30
-
-
-NUM_ELECTRODES = len(cell_ei)
-NUM_AMPS = 40
     
 cellids = np.array(sorted(vstim_data.get_cell_ids()))
-gsorted_cells = []
-data_tensor = np.zeros((len(cellids), NUM_ELECTRODES, NUM_AMPS))
-filtered_data_tensor = np.zeros((len(cellids), NUM_ELECTRODES, NUM_AMPS))
-run_data_tensor = np.zeros((len(cellids), NUM_ELECTRODES))
-
-
 
 def get_collapsed_ei_thr(cell_no, thr_factor):
     # Read the EI for a given cell
@@ -218,9 +208,12 @@ if __name__ == "__main__":
             
 
     gsorted_cells = []
+    
     data_tensor = np.zeros((len(cellids), NUM_ELECTRODES, NUM_AMPS))
     filtered_data_tensor = np.zeros((len(cellids), NUM_ELECTRODES, NUM_AMPS))
     run_data_tensor = np.zeros((len(cellids), NUM_ELECTRODES))
+    print("patterns",patterns)
+    print("data_tensor.shape",data_tensor.shape)
     
     pool = mp.Pool(processes = threads)
    
@@ -231,6 +224,8 @@ if __name__ == "__main__":
     for type_ in cell_types:
         print("Running for cell type %s" %type_)
         for cell in tqdm.tqdm(vstim_data.get_all_cells_similar_to_type(type_)):
+            # if cell != 124:
+            #     continue
             if specific_cell is not None:
                 if cell != specific_cell:
                     continue
@@ -244,7 +239,7 @@ if __name__ == "__main__":
                 for i in range(len(stim_elecs)):
                     if np.any(np.in1d(stim_elecs[i], relevant_patterns + 1)):
                         good_inds.append(patterns[i])
-                good_inds = np.array(good_inds)
+                good_inds = np.array(good_inds)-1
             else:
                 assert 1==0, "Specify new or oldlv data"
             
