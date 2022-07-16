@@ -68,7 +68,7 @@ class TemplateLoader:
         self.noise = self.spikesorting.channel_noise
         
         self.groups = {}
-        array_map = src.electrode_map.get_litke_array_adj_mat_by_array_id(array_id)
+        array_map = src.utilities.electrode_map.get_litke_array_adj_mat_by_array_id(array_id)
         for center, surround in enumerate(array_map):
             self.groups[center] = [center] + surround
         

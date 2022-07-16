@@ -27,9 +27,6 @@ parser.add_argument('-c', '--cell_types', type=str, nargs='+', help="Cell types 
 parser.add_argument('-p', '--power_threshold', type=str, help="Competing template power threshold.")
 parser.add_argument('-sl', '--start_time_limit', type=int, help="Signal window start sample.")
 parser.add_argument('-el', '--end_time_limit', type=int, help="Signal window end sample.")
-parser.add_argument('-cd', '--cluster_delay', type=int, help="Samples to begin clustering at.")
-parser.add_argument('-wb', '--window_buffer', type=int, help="Buffer samples on edge of template.")
-
 parser.add_argument('-cmp', '--compartments', type=str, nargs='+',  help="Cell compartments.")
 parser.add_argument('-m', '--mode', type=str,  help="Cell compartments.")
 parser.add_argument('-a', '--all', help="Run gsort on all cell types.", action="store_true")
@@ -49,36 +46,21 @@ overwrite = args.overwrite
 sasi = args.sasi
 mode = args.mode
 
-DEFAULT_THREADS = 24
+DEFAULT_THREADS = 12
 if args.threads is not None:
     threads = args.threads
 else:
     threads = DEFAULT_THREADS
     
-if (args.end_time_limit is not None) :
+if (args.end_time_limit is not None) and (args.start_time_limit is not None):
     end_time_limit = args.end_time_limit
+    start_time_limit = args.start_time_limit
+    time_limit = end_time_limit - start_time_limit
 else:
     end_time_limit = 55
-    
-
-if (args.start_time_limit is not None):
-    start_time_limit = args.start_time_limit
-else:
     start_time_limit = 0
-
-time_limit = end_time_limit - start_time_limit
+    time_limit = 55
     
-
-if args.cluster_delay is not None:
-    cluster_delay = args.cluster_delay
-else:
-    cluster_delay = 0
-    
-if args.window_buffer is not None:
-    window_buffer = args.window_buffer
-else:
-    window_buffer = 0
-
 if args.power_threshold is not None:
     pt = float(args.power_threshold)
 else:
@@ -102,7 +84,7 @@ else:
 if args.mutual_threshold is not None:
     mutual_threshold = args.mutual_threshold
 else:
-    mutual_threshold = 1
+    mutual_threshold = 0.5
 
 if args.specific_cell is not None:
     specific_cell = arg.specific_cell 
@@ -137,7 +119,6 @@ noise = vstim_data.channel_noise
 
 duplicates, cell_ei = compute_duplicates(vstim_data, noise)  
 
-NUM_CHANNELS = len(cell_ei)
 
 
 amplitudes = np.array([0.10053543, 0.11310236, 0.11938583, 0.13195276, 0.14451969,
@@ -154,8 +135,6 @@ rat = 2
 max_electrodes_considered = 30
     
 cellids = np.array(sorted(vstim_data.get_cell_ids()))
-
-
 
 def get_collapsed_ei_thr(cell_no, thr_factor):
     # Read the EI for a given cell
@@ -193,10 +172,6 @@ if __name__ == "__main__":
     logging.info('compartment: ' + str(compartments))
     logging.info('start time limit: ' + str(start_time_limit))
     logging.info('end time limit: ' + str(end_time_limit))
-    logging.info('cluster delay: ' + str(cluster_delay))
-    logging.info('window_buffer ' + str(window_buffer))
-    
-    
     
     patterns = []
     if mode == "oldlv":
@@ -207,10 +182,10 @@ if __name__ == "__main__":
                     patterns.append(int(pattern_movie[0]))
                     
 
-        patterns, num_amps = np.unique(np.array(patterns), return_counts=True)
+        patterns, counts = np.unique(np.array(patterns), return_counts=True)
         
         NUM_ELECTRODES =  np.max(patterns)
-        NUM_AMPS = np.max(num_amps)
+        NUM_AMPS = np.max(counts)
     elif mode == "newlv":
         stim_elecs = []
         num_amps = []
@@ -237,27 +212,21 @@ if __name__ == "__main__":
     data_tensor = np.zeros((len(cellids), NUM_ELECTRODES, NUM_AMPS))
     filtered_data_tensor = np.zeros((len(cellids), NUM_ELECTRODES, NUM_AMPS))
     run_data_tensor = np.zeros((len(cellids), NUM_ELECTRODES))
-    relevant_cells = {k:[] for k in patterns}
-
+    print("patterns",patterns)
+    print("data_tensor.shape",data_tensor.shape)
+    
+    pool = mp.Pool(processes = threads)
    
     outpath = os.path.join(filepath, dataset, estim_datarun, vstim_datarun)
-    all_cell_types = [ct for ct in vstim_data.get_all_present_cell_types() if 'bad' not in ct and 'dup' not in ct]
-    total_electrode_list, total_cell_to_electrode_list, mutual_cells, array_id = get_cell_info(all_cell_types, vstim_data, compartments, noise, mutual_threshold=mutual_threshold)
-    n_to_data_on_cells = {}
-    # running_cells = []
-    running_cells_ind = []
-    for type_ in cell_types:
-        print("Loading data for cell type %s" %type_)
-        
-        for cell in tqdm.tqdm(vstim_data.get_all_cells_similar_to_type(type_)):
-            # if cell != 124:
-            #     continue
-            if specific_cell is not None:
-                if cell != specific_cell:
-                    continue
 
-            cell_ind = cellids.index(cell)
+    total_electrode_list, total_cell_to_electrode_list, mutual_cells, array_id = get_cell_info(cell_types, vstim_data, compartments, noise, mutual_threshold=mutual_threshold)
+
+    all_relevant_cell_data = []
+    for type_ in cell_types:
+        print("Running for cell type %s" %type_)
+        for cell in vstim_data.get_all_cells_similar_to_type(type_):
             
+            cell_ind = cellids.index(cell)
             if mode == "oldlv":
                 good_inds, EI = get_collapsed_ei_thr(cell, noise_thresh)
             elif mode == "newlv":
@@ -273,103 +242,42 @@ if __name__ == "__main__":
             if len(good_inds)==0:
                 continue
     
-            
-            # print("good_inds",good_inds)
+            print("good_inds",good_inds)
             logging.info('\ncell considered: ' + str(cell))
             
             electrode_list =  list(set([e for c in mutual_cells[cell] for e in total_cell_to_electrode_list[c]]))
             cell_to_electrode_list = {k:v for k,v in total_cell_to_electrode_list.items() if k in mutual_cells[cell]}
             if len(electrode_list) == 0:
                 logging.info('no significant electrodes')
-                # print('No significant electrodes.')
+                print('No significant electrodes.')
                 continue
-            running_cells_ind += [cell_ind]
             
-            data_on_cells = get_center_eis(cell, electrode_list, ap = (vstim_analysis_path[:-7], vstim_datarun.rsplit('/')[-1]), excluded_types = excluded_types, excluded_cells = list(duplicates), power_threshold=pt, array_id = array_id, sample_len_left = time_limit +window_buffer,sample_len_right = time_limit+window_buffer)
-            n_to_data_on_cells[cell]=data_on_cells
-            for gi_ in good_inds+1:
-                relevant_cells[gi_]+=[cell]
-
-    running_cells_ind = np.array(running_cells_ind)
-    # results = pool.starmap(run_pattern_movie, product(patterns, [i for i in range(NUM_AMPS)], [(cellids, relevant_cells, mutual_cells,total_cell_to_electrode_list,start_time_limit,end_time_limit,estim_analysis_path, noise,outpath,n_to_data_on_cells)]))
-    # savemat(outpath + '/' + 'gsort_full_data_tensor.mat', {'cells': cellids, 'gsorted_cells': np.sort(np.array(gsorted_cells)),'probs': data_tensor, 'filtered_probs':filtered_data_tensor, 'run':run_data_tensor})
-    
-    patterns_run = 0
-  
-    file_exists = os.path.exists( os.path.join(outpath, 'init_probs.dat'))
-    print("file_exists", file_exists)
-    print("NUM_ELECTRODES", NUM_ELECTRODES)
-    print("NUM_CHANNELS",NUM_CHANNELS )
-    print("end_time_limit-start_time_limit", end_time_limit-start_time_limit)
-    if file_exists:
-        init_probs_fp = np.memmap(os.path.join(outpath, 'init_probs.dat'), dtype='float32', mode='r+', shape=(len(cellids), NUM_ELECTRODES,NUM_AMPS))
-        run_fp = np.memmap(os.path.join(outpath, 'run.dat'), dtype='int16', mode='r+', shape=(NUM_ELECTRODES,NUM_AMPS))
-        trials_fp = np.memmap(os.path.join(outpath, 'trial.dat'), dtype='int16', mode='r+', shape=(NUM_ELECTRODES,NUM_AMPS))
-        artifact_fp = np.memmap(os.path.join(outpath, 'artifact.dat'), dtype='float32', mode='r+', shape=(NUM_ELECTRODES,NUM_AMPS, NUM_CHANNELS, end_time_limit-start_time_limit))
-        final_probs_fp = np.memmap(os.path.join(outpath, 'final_probs.dat'), dtype='float32', mode='r+', shape=(len(cellids), NUM_ELECTRODES,NUM_AMPS))
-    
-    else: 
-        init_probs_fp = np.memmap(os.path.join(outpath, 'init_probs.dat'), dtype='float32', mode='w+', shape=(len(cellids), NUM_ELECTRODES,NUM_AMPS))
-        init_probs_fp[:] = np.nan
-        run_fp = np.memmap(os.path.join(outpath, 'run.dat'), dtype='int16', mode='w+', shape=(NUM_ELECTRODES,NUM_AMPS))
-        trials_fp = np.memmap(os.path.join(outpath, 'trial.dat'), dtype='int16', mode='w+', shape=(NUM_ELECTRODES,NUM_AMPS))
-        artifact_fp = np.memmap(os.path.join(outpath, 'artifact.dat'), dtype='float32', mode='w+', shape=(NUM_ELECTRODES,NUM_AMPS, NUM_CHANNELS, end_time_limit-start_time_limit))
-        artifact_fp[:] = np.nan
-        final_probs_fp = np.memmap(os.path.join(outpath, 'final_probs.dat'), dtype='float32', mode='w+', shape=(len(cellids), NUM_ELECTRODES,NUM_AMPS))
-        final_probs_fp[:] = np.nan
-    
-
-
-    def listener(q):
-        '''listens for messages on the q, writes to file. '''
-
-        count = 0
-        with tqdm.tqdm(total=len(patterns) * NUM_AMPS) as pbar:
-            while True:
-                p, k, init_probs, _, _, trials, m = q.get()
-                if p != -1:
-                    # print(init_probs[np.argwhere(init_probs)])
-                    # print("Assgining prob: ", p, k)
-                    init_probs_fp[:,p-1, k] = init_probs
-                    # artifact_fp[p-1, k,:,:] = artifact
-                    # final_probs_fp[:,p-1, k] = init_probs
-                    run_fp[p-1, k] = 1
-                    trials_fp[p-1, k] = trials
-                    
-                    init_probs_fp.flush()
-                    # artifact_fp.flush()
-                    # final_probs_fp.flush()
-                    run_fp.flush()
-                    trials_fp.flush()
-                    # print(f"Flushed to {p}, {k}")
-                pbar.update(1)
-                count = count + 1
-                if count == np.sum(num_amps):
-                    break
-            return 
-
-    
-    manager = mp.Manager()
-    q = manager.Queue()    
-
-    pool = mp.Pool(processes = threads)
-
-    watcher = pool.apply_async(listener, (q,))
-
-    savemat(os.path.join(outpath,'parameters.mat'), {'cells': cellids,'patterns':patterns, 'movies':NUM_AMPS, 'gsorted_cells': np.sort(running_cells_ind)})
+            data_on_cells = get_center_eis(cell, electrode_list, ap = (vstim_analysis_path[:-7], vstim_datarun.rsplit('/')[-1]), excluded_types = excluded_types, excluded_cells = list(duplicates), power_threshold=pt, array_id = array_id, sample_len_left = time_limit ,sample_len_right = time_limit)
+            good_patterns = (good_inds + 1).tolist()
             
-    preloaded_data = (cellids, running_cells_ind, relevant_cells, mutual_cells,total_cell_to_electrode_list,start_time_limit,end_time_limit,estim_analysis_path, noise,outpath,n_to_data_on_cells,NUM_CHANNELS, cluster_delay)
-    jobs = []
-    for p in patterns:
-        for k in range(NUM_AMPS):
-            job = pool.apply_async(run_pattern_movie, (p, k, preloaded_data, q))
-            jobs.append(job)
-    watcher.get()
-    for job in jobs: 
-        job.get()
-    
-    print("Finished")
 
+            all_relevant_cell_data += [(cell, (mutual_cells[cell],mutual_threshold), cell_to_electrode_list, electrode_list,data_on_cells,start_time_limit,end_time_limit,estim_analysis_path, noise,outpath, good_patterns)]
+            logging.info('electrodes considered: ' + str(np.array(electrode_list) + 1))
+            logging.info('patterns considered: ' + str(good_patterns))
+
+            if cell_ind not in gsorted_cells:
+                gsorted_cells.append(cell_ind)
+    
+    results = pool.starmap(run_movie_cell, product(patterns, [NUM_AMPS], all_relevant_cell_data))
+    
+    cell_inds = np.array([cellids.index(r[4]) for r in results for i in range(len(r[1])) if len(r[1])>0]).astype(int)
+    ps = np.array([r[0]-1 for r in results for i in range(len(r[1])) if len(r[1])>0]).astype(int)
+    ks = np.array([i for r in results for i in r[1] if len(r[1])>0]).astype(int)
+    cprobs = [i for r in results for i in r[2] if len(r[1])>0]
+    probs = [i for r in results for i in r[3] if len(r[1])>0]
+
+    data_tensor[cell_inds, ps, ks] = probs
+    filtered_data_tensor[cell_inds, ps, ks] = cprobs
+    run_data_tensor[cell_inds,ps] = 1
+    
+
+
+    savemat(outpath + '/' + 'gsort_full_data_tensor.mat', {'cells': cellids, 'gsorted_cells': np.sort(np.array(gsorted_cells)),'probs': data_tensor, 'filtered_probs':filtered_data_tensor, 'run':run_data_tensor})
+        
     pool.close()
-    pool.join()
     logging.info('finished')

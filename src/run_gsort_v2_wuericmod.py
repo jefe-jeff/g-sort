@@ -20,6 +20,7 @@ from scipy.ndimage.interpolation import shift
 import multiprocessing as mp
 import src.eilib as eil
 import warnings
+from scipy.signal import wiener
 
 from skimage.util.shape import view_as_windows as viewW
 
@@ -36,39 +37,45 @@ from itertools import starmap
 import fastconv.corr1d as corr1d # compiled dependency wueric, compiled already
 from typing import List, Tuple
 
-def run_pattern_movie(p,k,preloaded_data, q):
+def run_pattern_movie_live(p,k,preloaded_data, q):
     
-    cellids,running_cells_ind,relevant_cells,mutual_cells, total_cell_to_electrode_list, start_time_limit, end_time_limit,estim_analysis_path, noise, outpath, n_to_data_on_cells, NUM_CHANNELS  = preloaded_data
+    cellids,running_cells_ind,relevant_cells,mutual_cells, total_cell_to_electrode_list, start_time_limit, end_time_limit,estim_analysis_path, noise, outpath, n_to_data_on_cells, NUM_CHANNELS, cluster_delay  = preloaded_data
 
     time_limit = end_time_limit - start_time_limit
     artifact_signals = [np.zeros((1,time_limit)) for i in range(NUM_CHANNELS)]
     total_electrode_list = []
     init_probs = np.zeros(len(cellids))
     final_probs = np.zeros(len(cellids))
-    # print(p,k)
+    
     try:
         signal = get_oldlabview_pp_data(estim_analysis_path , p, k)
     except:
-        # print("Signal doesn't exists")
+        print("Signal doesn't exists", p, k)
+        q.put((-1, -1, -1, -1, -1, -1, ""))
         return 
-    # print(f"Started pattern={p}, movie={k}")
 
+    num_trials = len(signal)
+  
     for cell in np.array(cellids)[running_cells_ind]:
 
         electrode_list =  list(set([e for c in mutual_cells[cell] for e in total_cell_to_electrode_list[c]]))
         cell_to_electrode_list = {k:v for k,v in total_cell_to_electrode_list.items() if k in mutual_cells[cell]}
+
+        relevant_cells
         if cell in relevant_cells[p] and (len(electrode_list)>0):
             
-
-            num_trials = len(signal)
+            # print(f"Pre-artifact Processing cell {cell}", p,k)
+            
             raw_signal = signal[:, electrode_list, start_time_limit:end_time_limit].astype(float) 
             mask =  get_mask(raw_signal, )
-            cluster_cliques = cluster_each_cell(raw_signal,mask, cell_to_electrode_list, electrode_list, noise, "")
+            cluster_cliques = cluster_each_cell(raw_signal,mask, cell_to_electrode_list, electrode_list, noise, "", cluster_delay = cluster_delay)
             event_labels = convert_cliques_to_labels(cluster_cliques, num_trials)
+            
             significant_electrodes = np.arange(len(electrode_list))
+            event_labels = first_merge_event_cliques_by_noise(electrode_list, raw_signal, event_labels,  mask, significant_electrodes, noise)
+
             data_on_cells = n_to_data_on_cells[cell]
             finished, G, (_, _), (event_labels_with_virtual, _), (final_clusters, _), edge_to_matched_signals, _, mask, note = gsort_spike_sorting(event_labels, significant_electrodes, electrode_list, raw_signal, mask, 1, 1000, noise, data_on_cells, artifact_cluster_estimate=None )
-
             total_p, cell_in_clusters = get_probabilities(G, event_labels_with_virtual)
             # print("A")
             p_error = compute_cosine_error(mask, G, edge_to_matched_signals, event_labels_with_virtual, cell)
@@ -76,59 +83,165 @@ def run_pattern_movie(p,k,preloaded_data, q):
             init_probs[cellids.index(cell)] = total_p[cell]-p_error
             sig = signal[event_labels_with_virtual==final_clusters[0]][:,:,:end_time_limit]
             total_electrode_list += list(set(total_electrode_list+electrode_list))
+            # print(p, k, cell, total_p[cell])
+
             for e in electrode_list:
                 artifact_signals[e] = np.concatenate((artifact_signals[e], sig[:,e,:]), axis = 0)
-            
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        mean_artifact_signals = np.array([np.mean(s[1:], axis = 0) for s in artifact_signals])
-    # total_electrode_list = np.array(total_electrode_list)
-    # deartifacted = signal[:,:,:time_limit]-mean_artifact_signals[None,:,:]
+    # print(f"Finished pattern={p}, movie={k}")
+    # print("q", q.qsize(), "p", p, "k", k)
+    q.put((p, k, init_probs, -1, -1, num_trials, ""))
     
-    for cell in np.array(cellids)[running_cells_ind]:
+    return 
 
+
+def run_pattern_movie(p,k,preloaded_data, q):
+    
+    cellids,running_cells_ind,relevant_cells,mutual_cells, total_cell_to_electrode_list, start_time_limit, end_time_limit,estim_analysis_path, noise, outpath, n_to_data_on_cells, NUM_CHANNELS, cluster_delay  = preloaded_data
+
+    time_limit = end_time_limit - start_time_limit
+    artifact_signals = [np.zeros((1,time_limit)) for i in range(NUM_CHANNELS)]
+    total_electrode_list = []
+    init_probs = np.zeros(len(cellids))
+    final_probs = np.zeros(len(cellids))
+    # print("p,k",p,k)
+    try:
+        signal = get_oldlabview_pp_data(estim_analysis_path , p, k)
+    except:
+        print("Signal doesn't exists", p, k)
+        q.put((-1, -1, -1, -1, -1, -1, ""))
+        return 
+    # print(f"Started pattern={p}, movie={k}")
+    num_trials = len(signal)
+    for cell in np.array(cellids)[running_cells_ind]:
+        # print("cell", cell)
         electrode_list =  list(set([e for c in mutual_cells[cell] for e in total_cell_to_electrode_list[c]]))
         cell_to_electrode_list = {k:v for k,v in total_cell_to_electrode_list.items() if k in mutual_cells[cell]}
+
+        
         if cell in relevant_cells[p] and (len(electrode_list)>0):
             
-
-            num_trials = len(signal)
+            # print(f"Pre-artifact Processing cell {cell}", p,k)
+            
             raw_signal = signal[:, electrode_list, start_time_limit:end_time_limit].astype(float) 
-            
-            raw_signal = np.concatenate(( mean_artifact_signals[None,electrode_list, start_time_limit:end_time_limit],raw_signal), axis = 0)
-            
             mask =  get_mask(raw_signal, )
-            cluster_cliques = cluster_each_cell(raw_signal,mask, cell_to_electrode_list, electrode_list, noise, "")
-            event_labels = convert_cliques_to_labels(cluster_cliques, num_trials+1)
+            cluster_cliques = cluster_each_cell(raw_signal,mask, cell_to_electrode_list, electrode_list, noise, "", cluster_delay = cluster_delay)
+            event_labels = convert_cliques_to_labels(cluster_cliques, num_trials)
             significant_electrodes = np.arange(len(electrode_list))
+            event_labels = first_merge_event_cliques_by_noise(electrode_list, raw_signal, event_labels,  mask, significant_electrodes, noise)
+
             data_on_cells = n_to_data_on_cells[cell]
-            finished, G, (_, _), (event_labels_with_virtual, _), (final_clusters, _), edge_to_matched_signals, _, mask, note = gsort_spike_sorting(event_labels, significant_electrodes, electrode_list, raw_signal, mask, 1, 1000, noise, data_on_cells, artifact_cluster_estimate=event_labels[0] )
-            
+            finished, G, (_, _), (event_labels_with_virtual, _), (final_clusters, _), edge_to_matched_signals, _, mask, note = gsort_spike_sorting(event_labels, significant_electrodes, electrode_list, raw_signal, mask, 1, 1000, noise, data_on_cells, artifact_cluster_estimate=None )
             total_p, cell_in_clusters = get_probabilities(G, event_labels_with_virtual)
-            p_error = compute_cosine_error(mask, G, edge_to_matched_signals, event_labels_with_virtual, cell)
+            bad_edges = []
+            bad_edges = compute_cosine_error(mask, G, edge_to_matched_signals, event_labels_with_virtual, cell, bad_edges)
+            peak_electrode = np.argmax(np.max(np.abs(data_on_cells[1][data_on_cells[0].index(cell)]), axis = 1))
+            bad_edges = compute_latency_error(mask, G, edge_to_matched_signals, event_labels_with_virtual, cell, bad_edges, peak_electrode, offset = data_on_cells[-1][0,0], too_early = 5)
+            bad_edges = compute_small_signal_error(mask, G, edge_to_matched_signals, event_labels_with_virtual, cell, bad_edges, peak_electrode, too_small = noise[electrode_list][peak_electrode])
             
-            final_probs[cellids.index(cell)] = ((total_p[cell]-p_error)*(num_trials+1)-1)/num_trials 
+            p_error = compute_error(G, event_labels_with_virtual, cell, bad_edges)
+            init_probs[cellids.index(cell)] = total_p[cell]-p_error
+
+            sig = signal[event_labels_with_virtual==final_clusters[0]][:,:,:end_time_limit]
+            total_electrode_list += list(set(total_electrode_list+electrode_list))
+            for e in electrode_list:
+                artifact_signals[e] = np.concatenate((artifact_signals[e], sig[:,e,:]), axis = 0)
+            # print(f"Pre-artifact Processed cell {cell}", p, k)
+    # print(f"Finished pattern={p}, movie={k}")
+    # with warnings.catch_warnings():
+    #     warnings.simplefilter("ignore")
+    #     mean_artifact_signals = np.array([np.mean(s[1:], axis = 0) for s in artifact_signals])
+    
+    # for cell in np.array(cellids)[running_cells_ind]:
+
+    #     electrode_list =  list(set([e for c in mutual_cells[cell] for e in total_cell_to_electrode_list[c]]))
+    #     cell_to_electrode_list = {k:v for k,v in total_cell_to_electrode_list.items() if k in mutual_cells[cell]}
+    #     if cell in relevant_cells[p] and (len(electrode_list)>0):
+    #         num_trials = len(signal)
+    #         raw_signal = signal[:, electrode_list, start_time_limit:end_time_limit].astype(float) 
+            
+    #         raw_signal = np.concatenate(( mean_artifact_signals[None,electrode_list, start_time_limit:end_time_limit],raw_signal), axis = 0)
+            
+    #         mask =  get_mask(raw_signal, )
+    #         cluster_cliques = cluster_each_cell(raw_signal,mask, cell_to_electrode_list, electrode_list, noise, "")
+    #         event_labels = convert_cliques_to_labels(cluster_cliques, num_trials+1)
+    #         significant_electrodes = np.arange(len(electrode_list))
+    #         event_labels = first_merge_event_cliques_by_noise(electrode_list, raw_signal, event_labels,  mask, significant_electrodes, noise)
+
+            # data_on_cells = n_to_data_on_cells[cell]
+            # finished, G, (_, _), (event_labels_with_virtual, _), (final_clusters, _), edge_to_matched_signals, _, mask, note = gsort_spike_sorting(event_labels, significant_electrodes, electrode_list, raw_signal, mask, 1, 1000, noise, data_on_cells, artifact_cluster_estimate=event_labels[0] )
+            
+            # total_p, cell_in_clusters = get_probabilities(G, event_labels_with_virtual)
+            # bad_edges = []
+            # bad_edges = compute_cosine_error(mask, G, edge_to_matched_signals, event_labels_with_virtual, cell, bad_edges)
+            # peak_electrode = np.argmax(np.max(np.abs(data_on_cells[1][data_on_cells[0].index(cell)]), axis = 1))
+            # bad_edges = compute_latency_error(mask, G, edge_to_matched_signals, event_labels_with_virtual, cell, bad_edges, peak_electrode, too_early = 5)
+            # p_error = compute_error(G, event_labels_with_virtual, cell, bad_edges)
+            # final_probs[cellids.index(cell)] = ((total_p[cell]-p_error)*(num_trials+1)-1)/num_trials 
             
     
-    # print(f"Finished pattern={p}, movie={k}")
+    q.put((p, k, init_probs, -1, -1, num_trials, ""))
+    return 
 
-    q.put((p, k, init_probs, mean_artifact_signals, final_probs, ""))
-    return #p, k, init_probs, mean_artifact_signals, final_probs, ""
-     
-def compute_cosine_error(mask, G, graph_signal, clustering, n, cosine_similarity = 0.7):
+def compute_cosine_error(mask, G, graph_signal, clustering, n, bad_edges_, cosine_similarity = 0.7):
     
     edge_to_cell = {k:v for k, v in graph_signal.keys()}
     signal_index = np.argwhere([k[1] ==n for k in  graph_signal.keys()]).flatten()
     g_signal_error = 0
-
     if len(signal_index) != 0:
-
         edges = np.array([list(graph_signal.keys())[k][0] for k in signal_index])  
         low_power = [np.sum(mask*graph_signal[list(graph_signal.keys())[k]][0]*graph_signal[list(graph_signal.keys())[k]][1])/np.sqrt(np.sum(graph_signal[list(graph_signal.keys())[k]][1]**2))/np.sqrt(np.sum(mask*graph_signal[list(graph_signal.keys())[k]][0]**2))<=cosine_similarity for k in signal_index]
-        g_signal_error += sum([sum(clustering == e[1])/len(clustering) for e in edges[low_power]])
-        g_signal_error += sum([sum(clustering == n)/len(clustering) for e in edges[low_power] for n in nx.descendants(G, e[1])])
-    # print("Compute cosine error")
-    return g_signal_error
+        bad_edges = list(edges[low_power])
+        bad_edges_ += [e for e in bad_edges if tuple(e) not in [tuple(b) for b in bad_edges_]]
+    return bad_edges_
+
+     
+def compute_latency_error(mask, G, graph_signal, clustering, n, bad_edges_, electrode, offset = 50, too_early = 5, too_late = 25):
+    
+    signal_index = np.argwhere([k[1] ==n for k in  graph_signal.keys()]).flatten()
+    
+    if len(signal_index) != 0:
+        edges = np.array([list(graph_signal.keys())[k][0] for k in signal_index])  
+        low_power = [(offset-graph_signal[list(graph_signal.keys())[k]][-1][electrode] < too_early) or (offset-graph_signal[list(graph_signal.keys())[k]][-1][electrode] > too_late ) for k in signal_index]
+       
+
+        bad_edges = list(edges[low_power])
+        bad_edges_ += [e for e in bad_edges if tuple(e) not in [tuple(b) for b in bad_edges_]]
+    return bad_edges_
+
+def compute_small_signal_error(mask, G, graph_signal, clustering, n, bad_edges_, electrode,too_small = 1):
+    
+    signal_index = np.argwhere([k[1] ==n for k in  graph_signal.keys()]).flatten()
+    
+    if len(signal_index) != 0:
+        edges = np.array([list(graph_signal.keys())[k][0] for k in signal_index])  
+        low_power = [(np.max(np.abs(graph_signal[list(graph_signal.keys())[k]][1])[electrode])<=too_small) for k in signal_index]
+        bad_edges = list(edges[low_power])
+        bad_edges_ += [e for e in bad_edges if tuple(e) not in [tuple(b) for b in bad_edges_]]
+    return bad_edges_
+
+
+def compute_error(G, clustering, n, bad_edges):
+    error = 0 
+    error += sum([sum(clustering == e[1])/len(clustering) for e in bad_edges])
+    error += sum([sum(clustering == n)/len(clustering) for e in bad_edges for n in nx.descendants(G, e[1])])
+    return error
+
+# def compute_cosine_error(mask, G, graph_signal, clustering, n, cosine_similarity = 0.7):
+    
+#     edge_to_cell = {k:v for k, v in graph_signal.keys()}
+#     signal_index = np.argwhere([k[1] ==n for k in  graph_signal.keys()]).flatten()
+#     g_signal_error = 0
+
+#     if len(signal_index) != 0:
+
+#         edges = np.array([list(graph_signal.keys())[k][0] for k in signal_index])  
+#         low_power = [np.sum(mask*graph_signal[list(graph_signal.keys())[k]][0]*graph_signal[list(graph_signal.keys())[k]][1])/np.sqrt(np.sum(graph_signal[list(graph_signal.keys())[k]][1]**2))/np.sqrt(np.sum(mask*graph_signal[list(graph_signal.keys())[k]][0]**2))<=cosine_similarity for k in signal_index]
+#         low_power_value = [np.sum(mask*graph_signal[list(graph_signal.keys())[k]][0]*graph_signal[list(graph_signal.keys())[k]][1])/np.sqrt(np.sum(graph_signal[list(graph_signal.keys())[k]][1]**2))/np.sqrt(np.sum(mask*graph_signal[list(graph_signal.keys())[k]][0]**2)) for k in signal_index]
+#         # print(low_power_value)
+#         g_signal_error += sum([sum(clustering == e[1])/len(clustering) for e in edges[low_power]])
+#         g_signal_error += sum([sum(clustering == n)/len(clustering) for e in edges[low_power] for n in nx.descendants(G, e[1])])
+#     # print("Compute cosine error")
+#     return g_signal_error
 
 def run_movie_cell(p, ks, preloaded_data):
     
@@ -150,7 +263,7 @@ def run_movie_cell(p, ks, preloaded_data):
 
     if p not in good_patterns:
         return (p, [i for i in range(len(probs))], cosine_probs, probs, n)
-    print(f"cell {n}, pattern {p} started")
+    # print(f"cell {n}, pattern {p} started")
     
     cell_ids, cell_eis, cell_error, cell_spk_times = data_on_cells
     significant_electrodes = np.arange(len(electrode_list))
@@ -356,11 +469,10 @@ def gsort_spike_sorting(event_labels, significant_electrodes, electrode_list, si
     
    
     # Clean the difference signals
-    difference_signals = clean_signals(difference_signals)
+    difference_signals = clean_signals(difference_signals, noise=noise, electrode_list=electrode_list, thr = 1, mode="svd")
 
     # Find candidate edges in graph from comparing templates and difference signals
-    edge_cell_to_fit_info, edge_cell_to_signal, edge_cell_to_error, edge_cell_to_loss, edge_cell_to_noise_loss = find_candidate_edges(electrode_list, data_on_cells, difference_signals, event_signal_ordering,  mask, event_labels, noise, constrained = constrained, artifact_estimate = artifact_cluster_estimate)
-    
+    edge_cell_to_fit_info, edge_cell_to_signal, edge_cell_to_error, edge_cell_to_loss, edge_cell_to_noise_loss, edge_cell_to_latency = find_candidate_edges(electrode_list, data_on_cells, difference_signals, event_signal_ordering,  mask, event_labels, noise, constrained = constrained, artifact_estimate = artifact_cluster_estimate)
     sorted_edges = sorted(edge_cell_to_loss.items(), key=lambda item: item[1])
     _, _, num_samples = signals.shape   
     
@@ -471,9 +583,9 @@ def gsort_spike_sorting(event_labels, significant_electrodes, electrode_list, si
         cell = edge_data[(tail,head)]
         d_sig = difference_signals[event_signal_ordering_tup.index((head, tail))]
         c_sig = edge_cell_to_signal[((head, tail), cell)]
-        edge_to_matched_signals[((tail, head), cell)] = (d_sig, c_sig, edge_cell_to_loss[((head, tail), cell)], edge_cell_to_fit_info[((head, tail), cell)][2],edge_cell_to_fit_info[((head, tail), cell)][3])
+        edge_to_matched_signals[((tail, head), cell)] = (d_sig, c_sig, edge_cell_to_loss[((head, tail), cell)], edge_cell_to_fit_info[((head, tail), cell)][2],edge_cell_to_fit_info[((head, tail), cell)][3], edge_cell_to_latency[((head, tail), cell)])
     
-
+        print(edge_cell_to_latency[((head, tail), cell)])
     return finished, G, (initial_event_labels, signals_tmp), (event_labels_with_virtual, signals), (event_labels, final_signals), edge_to_matched_signals, tracker, mask, note
 
 def first_merge_event_cliques_by_noise(electrode_list, signals, event_labels_tmp,  mask, significant_electrodes, noise):
@@ -825,7 +937,7 @@ def get_center_eis(n, electrode_list, ap, array_id = 1501,  num_samples = 25, sn
     # cellids.append(-1)
     return cellids,  cell_eis_tmp, cell_variance_tmp, peak_spike_times
 
-def clean_signals(signals, thr = 1):
+def clean_signals(signals, noise=None, electrode_list=None, thr = 1, mode="svd"):
     """
     Denoise signals with SVD decomposition + thresholding
     signals: np.array
@@ -835,20 +947,27 @@ def clean_signals(signals, thr = 1):
     """
    
     num_putative_signals = signals.shape[0]
-    putative_signals_flat = signals.reshape((num_putative_signals, -1))
+    
     
     # SVD of signals flattend across electrodes x time
-    try:
-        U, S, Vh = np.linalg.svd(putative_signals_flat)
+    if mode == "svd":
+        putative_signals_flat = signals.reshape((num_putative_signals, -1))
+        try:
+            U, S, Vh = np.linalg.svd(putative_signals_flat)
 
-        # Singular values are presorted; store indices with singular value above threshold
-        sc = sum(S > thr) 
+            # Singular values are presorted; store indices with singular value above threshold
+            sc = sum(S > thr) 
 
-        # Reconstruct signal
-        clean_putative_signals = U[:, :sc] @ np.diag(S[:sc]) @ Vh[:sc, :]
-        return clean_putative_signals.reshape(signals.shape)
-    except:
+            # Reconstruct signal
+            clean_putative_signals = U[:, :sc] @ np.diag(S[:sc]) @ Vh[:sc, :]
+            return clean_putative_signals.reshape(signals.shape)
+        except:
+            return signals
+    else:
+        for j in range(signals.shape[1]):
+            signals[:,j,:] = wiener(signals[:,j,:], mysize=(1, 5), noise=2*noise[electrode_list][j]**2)
         return signals
+            
                   
 def compute_difference_signals(signals, event_labels):
     """
@@ -1237,9 +1356,10 @@ def find_candidate_edges(electrode_list, data_on_cells, difference_signals, diff
     edge_cell_to_error = {}
     edge_cell_to_loss = {}
     edge_cell_to_noise_loss = {}
+    edge_cell_to_latency = {}
     
     if len(difference_signals) == 0:
-        return edge_cell_to_fit_info, edge_cell_to_sig, edge_cell_to_error, edge_cell_to_loss, edge_cell_to_noise_loss
+        return edge_cell_to_fit_info, edge_cell_to_sig, edge_cell_to_error, edge_cell_to_loss, edge_cell_to_noise_loss, edge_cell_to_latency
 
     # Chi-squared determined goodness-of-fit threshold for noise-normalized MSE between templates and difference signals
     goodness_of_fit_threshold = sum([scipy.stats.chi2.ppf(p, sum(mask[i])) for i in range(len(mask)) if sum(mask[i]) != 0])
@@ -1279,6 +1399,7 @@ def find_candidate_edges(electrode_list, data_on_cells, difference_signals, diff
    
     num_samples = difference_signals.shape[2]
     best_match_signals = np.zeros((len(negative_log_likelihood), len(electrode_list), num_samples))
+    best_match_latency = np.zeros((len(negative_log_likelihood), len(electrode_list)))
     best_match_full = np.zeros((len(negative_log_likelihood), len(electrode_list), cell_eis.shape[2]))
     best_match_variance = np.zeros((len(negative_log_likelihood), len(electrode_list), num_samples))
     
@@ -1291,12 +1412,15 @@ def find_candidate_edges(electrode_list, data_on_cells, difference_signals, diff
         cell_subset = cell_eis[cell_indices, i, :]
         variance_subset = cell_variance[cell_indices, i, :]
         
+        # print("relevant_indices_start", relevant_indices_start)
+
         # Slice out the relevant points from the template and template error according to the shift information from 'direct_similarity'
         best_match_signals[:, i, :] = np.array([[cell_subset[j, i] for i in range(l, l +num_samples)] for j, l in enumerate(relevant_indices_start)])
+        best_match_latency[:, i] = relevant_indices_start
+        
         best_match_variance[:, i, :] = np.array([[variance_subset[j, i] for i in range(l , l+num_samples)] for j, l in enumerate(relevant_indices_start)])   
 
         best_match_full[:, i, :] = cell_subset
-                     
     # For each matched cell, 
     for i, pair in enumerate(difference_signal_ordering_rep):
                
@@ -1305,10 +1429,10 @@ def find_candidate_edges(electrode_list, data_on_cells, difference_signals, diff
         edge_cell_to_error[(pair, cell_ids[cell_indices[i]])] = best_match_variance[i]
         edge_cell_to_loss[(pair, cell_ids[cell_indices[i]])] = negative_log_likelihood[i]
         edge_cell_to_noise_loss[(pair, cell_ids[cell_indices[i]])] = noise_negative_log_likelihood[i]
-        
+        edge_cell_to_latency[(pair, cell_ids[cell_indices[i]])] = best_match_latency[i]
             
            
-    return edge_cell_to_fit_info, edge_cell_to_sig, edge_cell_to_error, edge_cell_to_loss, edge_cell_to_noise_loss
+    return edge_cell_to_fit_info, edge_cell_to_sig, edge_cell_to_error, edge_cell_to_loss, edge_cell_to_noise_loss, edge_cell_to_latency
         
 def get_significant_electrodes(ei, compartments, noise, cell_spike_window = 25, max_electrodes_considered = 30, rat = 2):
     cell_power = ei**2
@@ -1444,6 +1568,7 @@ def get_cell_info(cell_types, vstim_data, compartments, noise, mutual_threshold 
             if ov >= mutual_threshold:
                 mutual_cells[cell1] += [cell2]
     
+    mutual_cells = {k:list(set(v)) for k, v in mutual_cells.items()}
     num_electrodes = ei.shape[0]
     if num_electrodes == 519:
         array_id = 1502

@@ -38,7 +38,7 @@ def get_bootstrap_information(ANALYSIS_BASE, gsort_path,dataset, estim, wnoise, 
             if 'edge_probs' in prob_dict[k].keys():
                 edge_probs+=[prob_dict[k]['edge_probs']]
             else:
-                edge_probs+=[np.array([0])]
+                edge_probs+=[np.array([-1])]
             clusters += [prob_dict[k]['clustering']]
 
             edge_set = []
@@ -211,8 +211,11 @@ def get_difference_signals(pattern_movies,clusters,edges,ANALYSIS_BASE, dataset,
     all_ds_stack = np.vstack(all_ds_stack)
     return all_ds, all_ds_stack, all_ds_inds, num_electrodes, num_samples, movie_stack
 
-def compute_average_diff_signal_and_error(dss,dss_stack, num_electrodes, num_samples):
+def compute_average_diff_signal_and_error(dss,dss_stack, num_electrodes, num_samples, best_electrode):
     latencies = np.argmin(dss_stack, axis = 2)
+    print(latencies.shape)
+    latencies = np.tile(np.argmin(dss_stack[:,best_electrode,:], axis = 1), (num_electrodes,1 )).T
+    print(latencies.shape)
     avg_latency = np.median(latencies, axis = 0)
     latency_deviation = latencies-avg_latency
     
@@ -257,7 +260,6 @@ def compute_average_diff_signal_and_error(dss,dss_stack, num_electrodes, num_sam
         error += [edge_error]
         
     return average_ds, average_error,std_error, shifted_dss, shifted_dss_stack,error, error_stack
-
 
 def get_mean_edge_error(error):
     mean_edge_error = []
@@ -385,3 +387,14 @@ def make_dss_comparison(p, average_ds, dss, all_relevant_movies, all_total_probs
         ax2.plot(average_ds.flatten(), color = "black")
 
     plt.show()
+
+def sweep_I3(I1, I2, amplitudes):
+    indices = []
+    amps = []
+    for i, a in enumerate(amplitudes):
+        if a[1]==I2 and a[0]==I1:
+            indices += [i]
+            amps += [a[2]]
+            
+    return indices,amps
+    
