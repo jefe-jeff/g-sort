@@ -32,6 +32,10 @@ parser.add_argument('-wb', '--window_buffer', type=int, help="Buffer samples on 
 
 parser.add_argument('-cmp', '--compartments', type=str, nargs='+',  help="Cell compartments.")
 parser.add_argument('-m', '--mode', type=str,  help="Cell compartments.")
+
+parser.add_argument('-eb', '--estim_base', type=str,  help="Estim base.")
+parser.add_argument('-vb', '--vstim_base', type=str,  help="Vstim base.")
+
 parser.add_argument('-a', '--all', help="Run gsort on all cell types.", action="store_true")
 parser.add_argument('-ov', '--overwrite', help="Overwrite pickle files", action="store_true")
 parser.add_argument('-sasi', '--sasi', help="Exclude crap in all considerations", action="store_true")
@@ -109,11 +113,12 @@ if args.specific_cell is not None:
 else:
     specific_cell = None
 
-ANALYSIS_BASE = '/Volumes/Analysis'
-vstim_analysis_path = os.path.join(ANALYSIS_BASE, dataset, vstim_datarun)
+VISUAL_ANALYSIS_BASE = args.vstim_base if args.vstim_base!= None else '/Volumes/Analysis'
+vstim_analysis_path = os.path.join(VISUAL_ANALYSIS_BASE, dataset, vstim_datarun)
 
 print(vstim_analysis_path)
-estim_analysis_path = os.path.join(ANALYSIS_BASE, dataset, estim_datarun)
+ESTIM_ANALYSIS_BASE = args.estim_base if args.estim_base!= None else '/Volumes/Analysis'
+estim_analysis_path = os.path.join(ESTIM_ANALYSIS_BASE, dataset, estim_datarun)
 pattern_path = os.path.join(estim_analysis_path, 'pattern_files')
 
 vstim_data = vl.load_vision_data(vstim_analysis_path,
@@ -320,31 +325,31 @@ if __name__ == "__main__":
     
 
 
-    def listener(q):
+    def listener(max_index, q):
         '''listens for messages on the q, writes to file. '''
 
         count = 0
-        with tqdm.tqdm(total=len(patterns) * NUM_AMPS) as pbar:
+        with tqdm.tqdm(total=max_index) as pbar:
             while True:
-                p, k, init_probs, _, _, trials, m = q.get()
+                p, k, init_probs, artifact, final_probs, trials, m = q.get()
                 if p != -1:
                     # print(init_probs[np.argwhere(init_probs)])
                     # print("Assgining prob: ", p, k)
                     init_probs_fp[:,p-1, k] = init_probs
-                    # artifact_fp[p-1, k,:,:] = artifact
-                    # final_probs_fp[:,p-1, k] = init_probs
+                    artifact_fp[p-1, k,:,:] = artifact
+                    final_probs_fp[:,p-1, k] = final_probs
                     run_fp[p-1, k] = 1
                     trials_fp[p-1, k] = trials
                     
                     init_probs_fp.flush()
-                    # artifact_fp.flush()
-                    # final_probs_fp.flush()
+                    artifact_fp.flush()
+                    final_probs_fp.flush()
                     run_fp.flush()
                     trials_fp.flush()
                     # print(f"Flushed to {p}, {k}")
                 pbar.update(1)
                 count = count + 1
-                if count == np.sum(num_amps):
+                if count == max_index:
                     break
             return 
 
@@ -353,17 +358,28 @@ if __name__ == "__main__":
     q = manager.Queue()    
 
     pool = mp.Pool(processes = threads)
-
-    watcher = pool.apply_async(listener, (q,))
+    
+    total_jobs = 0
+    for p in patterns:
+        for k in range(NUM_AMPS):
+            if (run_fp[p-1, k] == 0):
+                total_jobs += 1
+    print("total jobs", total_jobs)
+                
+    watcher = pool.apply_async(listener, (total_jobs, q))
 
     savemat(os.path.join(outpath,'parameters.mat'), {'cells': cellids,'patterns':patterns, 'movies':NUM_AMPS, 'gsorted_cells': np.sort(running_cells_ind)})
             
     preloaded_data = (cellids, running_cells_ind, relevant_cells, mutual_cells,total_cell_to_electrode_list,start_time_limit,end_time_limit,estim_analysis_path, noise,outpath,n_to_data_on_cells,NUM_CHANNELS, cluster_delay)
     jobs = []
+    
     for p in patterns:
         for k in range(NUM_AMPS):
-            job = pool.apply_async(run_pattern_movie, (p, k, preloaded_data, q))
-            jobs.append(job)
+            if (run_fp[p-1, k] == 0):
+                job = pool.apply_async(run_pattern_movie, (p, k, preloaded_data, q))
+                jobs.append(job)
+    
+    
     watcher.get()
     for job in jobs: 
         job.get()

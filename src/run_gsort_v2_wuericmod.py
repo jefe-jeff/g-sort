@@ -104,13 +104,15 @@ def run_pattern_movie(p,k,preloaded_data, q):
     init_probs = np.zeros(len(cellids))
     final_probs = np.zeros(len(cellids))
     # print("p,k",p,k)
+#     print(f"Started pattern={p}, movie={k}")
     try:
         signal = get_oldlabview_pp_data(estim_analysis_path , p, k)
     except:
-        print("Signal doesn't exists", p, k)
+#         print("Signal doesn't exists", p, k)
+#         print("Quit")
         q.put((-1, -1, -1, -1, -1, -1, ""))
         return 
-    # print(f"Started pattern={p}, movie={k}")
+#     print(f"Started pattern={p}, movie={k}")
     num_trials = len(signal)
     for cell in np.array(cellids)[running_cells_ind]:
         # print("cell", cell)
@@ -145,41 +147,45 @@ def run_pattern_movie(p,k,preloaded_data, q):
             total_electrode_list += list(set(total_electrode_list+electrode_list))
             for e in electrode_list:
                 artifact_signals[e] = np.concatenate((artifact_signals[e], sig[:,e,:]), axis = 0)
-            # print(f"Pre-artifact Processed cell {cell}", p, k)
-    # print(f"Finished pattern={p}, movie={k}")
-    # with warnings.catch_warnings():
-    #     warnings.simplefilter("ignore")
-    #     mean_artifact_signals = np.array([np.mean(s[1:], axis = 0) for s in artifact_signals])
+            
+            
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        mean_artifact_signals = np.array([np.mean(s[1:], axis = 0) for s in artifact_signals])
     
-    # for cell in np.array(cellids)[running_cells_ind]:
-
-    #     electrode_list =  list(set([e for c in mutual_cells[cell] for e in total_cell_to_electrode_list[c]]))
-    #     cell_to_electrode_list = {k:v for k,v in total_cell_to_electrode_list.items() if k in mutual_cells[cell]}
-    #     if cell in relevant_cells[p] and (len(electrode_list)>0):
-    #         num_trials = len(signal)
-    #         raw_signal = signal[:, electrode_list, start_time_limit:end_time_limit].astype(float) 
-            
-    #         raw_signal = np.concatenate(( mean_artifact_signals[None,electrode_list, start_time_limit:end_time_limit],raw_signal), axis = 0)
-            
-    #         mask =  get_mask(raw_signal, )
-    #         cluster_cliques = cluster_each_cell(raw_signal,mask, cell_to_electrode_list, electrode_list, noise, "")
-    #         event_labels = convert_cliques_to_labels(cluster_cliques, num_trials+1)
-    #         significant_electrodes = np.arange(len(electrode_list))
-    #         event_labels = first_merge_event_cliques_by_noise(electrode_list, raw_signal, event_labels,  mask, significant_electrodes, noise)
-
-            # data_on_cells = n_to_data_on_cells[cell]
-            # finished, G, (_, _), (event_labels_with_virtual, _), (final_clusters, _), edge_to_matched_signals, _, mask, note = gsort_spike_sorting(event_labels, significant_electrodes, electrode_list, raw_signal, mask, 1, 1000, noise, data_on_cells, artifact_cluster_estimate=event_labels[0] )
-            
-            # total_p, cell_in_clusters = get_probabilities(G, event_labels_with_virtual)
-            # bad_edges = []
-            # bad_edges = compute_cosine_error(mask, G, edge_to_matched_signals, event_labels_with_virtual, cell, bad_edges)
-            # peak_electrode = np.argmax(np.max(np.abs(data_on_cells[1][data_on_cells[0].index(cell)]), axis = 1))
-            # bad_edges = compute_latency_error(mask, G, edge_to_matched_signals, event_labels_with_virtual, cell, bad_edges, peak_electrode, too_early = 5)
-            # p_error = compute_error(G, event_labels_with_virtual, cell, bad_edges)
-            # final_probs[cellids.index(cell)] = ((total_p[cell]-p_error)*(num_trials+1)-1)/num_trials 
-            
+    try:
+        prev_signal = get_oldlabview_pp_data(estim_analysis_path , p, k-1)
+        prev_signal_exists = True
+    except:
+        prev_signal_exists = False
     
-    q.put((p, k, init_probs, -1, -1, num_trials, ""))
+    if prev_signal_exists:
+        num_trials_total = len(signal) + len(prev_signal)
+        for cell in np.array(cellids)[running_cells_ind]:
+                # print("cell", cell)
+                electrode_list =  list(set([e for c in mutual_cells[cell] for e in total_cell_to_electrode_list[c]]))
+                cell_to_electrode_list = {k:v for k,v in total_cell_to_electrode_list.items() if k in mutual_cells[cell]}
+                if cell in relevant_cells[p] and (len(electrode_list)>0):
+                    raw_signal = np.vstack((prev_signal, signal))[:, electrode_list, start_time_limit:end_time_limit].astype(float) 
+                    mask =  get_mask(raw_signal, )
+                    cluster_cliques = cluster_each_cell(raw_signal,mask, cell_to_electrode_list, electrode_list, noise, "", cluster_delay = cluster_delay)
+                    event_labels = convert_cliques_to_labels(cluster_cliques, num_trials_total)
+                    significant_electrodes = np.arange(len(electrode_list))
+                    event_labels = first_merge_event_cliques_by_noise(electrode_list, raw_signal, event_labels,  mask, significant_electrodes, noise)
+
+                    data_on_cells = n_to_data_on_cells[cell]
+                    finished, G, (_, _), (event_labels_with_virtual, _), (final_clusters, _), edge_to_matched_signals, _, mask, note = gsort_spike_sorting(event_labels, significant_electrodes, electrode_list, raw_signal, mask, 1, 1000, noise, data_on_cells, artifact_cluster_estimate=None )
+                    total_p, cell_in_clusters = get_probabilities(G, event_labels_with_virtual[len(prev_signal):])
+                    bad_edges = []
+                    bad_edges = compute_cosine_error(mask, G, edge_to_matched_signals, event_labels_with_virtual[len(prev_signal):], cell, bad_edges)
+                    peak_electrode = np.argmax(np.max(np.abs(data_on_cells[1][data_on_cells[0].index(cell)]), axis = 1))
+                    bad_edges = compute_latency_error(mask, G, edge_to_matched_signals, event_labels_with_virtual[len(prev_signal):], cell, bad_edges, peak_electrode, offset = data_on_cells[-1][0,0], too_early = 5)
+                    bad_edges = compute_small_signal_error(mask, G, edge_to_matched_signals, event_labels_with_virtual[len(prev_signal):], cell, bad_edges, peak_electrode, too_small = noise[electrode_list][peak_electrode])
+                    p_error = compute_error(G, event_labels_with_virtual[len(prev_signal):], cell, bad_edges)
+                    final_probs[cellids.index(cell)] = total_p[cell]-p_error
+
+
+    q.put((p, k, init_probs, mean_artifact_signals, final_probs, num_trials, ""))
     return 
 
 def compute_cosine_error(mask, G, graph_signal, clustering, n, bad_edges_, cosine_similarity = 0.7):
@@ -202,7 +208,7 @@ def compute_latency_error(mask, G, graph_signal, clustering, n, bad_edges_, elec
     if len(signal_index) != 0:
         edges = np.array([list(graph_signal.keys())[k][0] for k in signal_index])  
         low_power = [(offset-graph_signal[list(graph_signal.keys())[k]][-1][electrode] < too_early) or (offset-graph_signal[list(graph_signal.keys())[k]][-1][electrode] > too_late ) for k in signal_index]
-       
+    
 
         bad_edges = list(edges[low_power])
         bad_edges_ += [e for e in bad_edges if tuple(e) not in [tuple(b) for b in bad_edges_]]
@@ -333,7 +339,6 @@ def run_movie_cell(p, ks, preloaded_data):
         run_info[k]['note'] = note
     with open(os.path.join(outpath, 'gsort_info_n' + str(n)+ '_p' + str(p) +'.pkl'), 'wb') as f:
             pickle.dump(run_info, f)
-    print(f"cell {n}, pattern {p} finished")
 
     return (p, [i for i in range(len(probs))], cosine_probs, probs, n)
 
@@ -415,7 +420,7 @@ def run_movie(n, p, ks, preloaded_data):
         run_info[k]['prob'] = total_p[n]    
    
         probs += [total_p[n]]
-        print('cosine_probs',cosine_probs[-1])
+#         print('cosine_probs',cosine_probs[-1])
 
         run_info[k]['clustering'] = event_labels_with_virtual
         run_info[k]['graph_info'] = (list(G.nodes), list(G.edges), nx.get_edge_attributes(G, 'cell'))
@@ -427,7 +432,7 @@ def run_movie(n, p, ks, preloaded_data):
 
     return ( p, [i for i in range(len(probs))], cosine_probs, probs)
 
-def gsort_spike_sorting(event_labels, significant_electrodes, electrode_list, signals_tmp, mask_tmp, iterations,max_iter, noise, data_on_cells, damping = 0.5, sat_band = 5, unsatured_min= -1000, unsaturated_max = 400, cluster_delay = 7, artifact_cluster_estimate = None, hierachical_cluster = False, no_time = False):
+def gsort_spike_sorting(event_labels, significant_electrodes, electrode_list, signals_tmp, mask_tmp, iterations,max_iter, noise, data_on_cells, damping = 0.5, sat_band = 5, unsatured_min= -1000, unsaturated_max = 400, cluster_delay = 7, artifact_cluster_estimate = None, hierachical_cluster = False, no_time = False, raw = False):
     """
     Main run script
     """
@@ -472,7 +477,10 @@ def gsort_spike_sorting(event_labels, significant_electrodes, electrode_list, si
     difference_signals = clean_signals(difference_signals, noise=noise, electrode_list=electrode_list, thr = 1, mode="svd")
 
     # Find candidate edges in graph from comparing templates and difference signals
-    edge_cell_to_fit_info, edge_cell_to_signal, edge_cell_to_error, edge_cell_to_loss, edge_cell_to_noise_loss, edge_cell_to_latency = find_candidate_edges(electrode_list, data_on_cells, difference_signals, event_signal_ordering,  mask, event_labels, noise, constrained = constrained, artifact_estimate = artifact_cluster_estimate)
+    if not raw:
+        edge_cell_to_fit_info, edge_cell_to_signal, edge_cell_to_error, edge_cell_to_loss, edge_cell_to_noise_loss, edge_cell_to_latency = find_candidate_edges(electrode_list, data_on_cells, difference_signals, event_signal_ordering,  mask, event_labels, noise, constrained = constrained, artifact_estimate = artifact_cluster_estimate)
+    else:
+        edge_cell_to_fit_info, edge_cell_to_signal, edge_cell_to_error, edge_cell_to_loss, edge_cell_to_noise_loss, edge_cell_to_latency = find_candidate_edges_raw(electrode_list, data_on_cells, difference_signals, event_signal_ordering,  mask, event_labels, noise, constrained = constrained, artifact_estimate = artifact_cluster_estimate)
     sorted_edges = sorted(edge_cell_to_loss.items(), key=lambda item: item[1])
     _, _, num_samples = signals.shape   
     
@@ -585,8 +593,8 @@ def gsort_spike_sorting(event_labels, significant_electrodes, electrode_list, si
         c_sig = edge_cell_to_signal[((head, tail), cell)]
         edge_to_matched_signals[((tail, head), cell)] = (d_sig, c_sig, edge_cell_to_loss[((head, tail), cell)], edge_cell_to_fit_info[((head, tail), cell)][2],edge_cell_to_fit_info[((head, tail), cell)][3], edge_cell_to_latency[((head, tail), cell)])
     
-        print(edge_cell_to_latency[((head, tail), cell)])
-    return finished, G, (initial_event_labels, signals_tmp), (event_labels_with_virtual, signals), (event_labels, final_signals), edge_to_matched_signals, tracker, mask, note
+#         print(edge_cell_to_latency[((head, tail), cell)])
+    return finished, G, (initial_event_labels, signals_tmp), (event_labels_with_virtual, signals), (event_labels, final_signals), edge_to_matched_signals, edge_cell_to_loss, mask, note
 
 def first_merge_event_cliques_by_noise(electrode_list, signals, event_labels_tmp,  mask, significant_electrodes, noise):
     """
@@ -1243,8 +1251,10 @@ def strided_indexing_roll(A, r):
     n = A.shape[1]
     return viewW(A_ext,(1,n))[np.arange(len(r)), -r + (n-1),0]
 
+
+
 def find_candidate_edges_raw(electrode_list, data_on_cells, difference_signals, difference_signal_ordering, mask, event_labels, noise,
-                               constrained = 'gof',  p = 0.99, max_electrodes_oor = 2, valid_shift_range = 35, artifact_estimate = None, plot = True):
+                               constrained = 'gof',  p = 0.99, max_electrodes_oor = 2, valid_shift_range = 35, artifact_estimate = None, plot = True, no_time = False):
     '''
     Generate potential edges in graph. 
     
@@ -1267,9 +1277,10 @@ def find_candidate_edges_raw(electrode_list, data_on_cells, difference_signals, 
     edge_cell_to_error = {}
     edge_cell_to_loss = {}
     edge_cell_to_noise_loss = {}
+    edge_cell_to_latency = {}
     
     if len(difference_signals) == 0:
-        return edge_cell_to_fit_info, edge_cell_to_sig, edge_cell_to_error, edge_cell_to_loss, edge_cell_to_noise_loss
+        return edge_cell_to_fit_info, edge_cell_to_sig, edge_cell_to_error, edge_cell_to_loss, edge_cell_to_noise_loss, edge_cell_to_latency
 
     # Chi-squared determined goodness-of-fit threshold for noise-normalized MSE between templates and difference signals
     goodness_of_fit_threshold = sum([scipy.stats.chi2.ppf(p, sum(mask[i])) for i in range(len(mask)) if sum(mask[i]) != 0])
@@ -1283,7 +1294,16 @@ def find_candidate_edges_raw(electrode_list, data_on_cells, difference_signals, 
     event_counts = Counter(event_labels)
    
     event_pop = np.array([[1/event_counts[e[0]],1/event_counts[e[1]]] for e in difference_signal_ordering])
-    normalized_mse, best_match_idx, negative_log_likelihood, noise_negative_log_likelihood = direct_similarity_raw_wueric(electrode_list, data_on_cells, difference_signals,  mask, event_pop, noise)
+    if not no_time:
+        normalized_mse, best_match_idx, negative_log_likelihood, noise_negative_log_likelihood = direct_similarity_raw_wueric(electrode_list, data_on_cells, difference_signals,  mask, event_pop, noise)
+    else:
+        cell_eis_space_ind = np.argmin(cell_eis, axis = 2)[:,:,None]
+        cell_eis_space = np.take_along_axis(cell_eis, cell_eis_space_ind, axis =2)
+        cell_variance_space = np.take_along_axis(cell_variance, cell_eis_space_ind, axis =2)
+        data_on_cells_space = (cell_ids, cell_eis_space, cell_variance_space, peak_st)
+        difference_signals_space = np.min(difference_signals, axis = 2)[:,:,None]
+        normalized_mse, best_match_idx, negative_log_likelihood, noise_negative_log_likelihood = direct_similarity_wueric(electrode_list, data_on_cells_space, difference_signals_space,  np.ones((len(mask), 1)), event_pop, noise)
+        
 
     # Choose different signal orientation based on maxmimum likehood
     max_likelihood = np.min(negative_log_likelihood, axis = 1)
@@ -1292,15 +1312,15 @@ def find_candidate_edges_raw(electrode_list, data_on_cells, difference_signals, 
         normalized_mse[difference_signal_ordering[:, 0] == artifact_estimate] = np.inf
     
     difference_signal_ordering_rep = list(map(tuple, np.repeat(difference_signal_ordering, len(cell_ids), axis = 0)))
-   
+    
     normalized_mse = normalized_mse.flatten()
     best_match_idx = {k:v.flatten() for k, v in best_match_idx.items()}
     negative_log_likelihood = negative_log_likelihood.flatten()
     noise_negative_log_likelihood = noise_negative_log_likelihood.flatten()
-    
-    
+   
     num_samples = difference_signals.shape[2]
     best_match_signals = np.zeros((len(negative_log_likelihood), len(electrode_list), num_samples))
+    best_match_latency = np.zeros((len(negative_log_likelihood), len(electrode_list)))
     best_match_full = np.zeros((len(negative_log_likelihood), len(electrode_list), cell_eis.shape[2]))
     best_match_variance = np.zeros((len(negative_log_likelihood), len(electrode_list), num_samples))
     
@@ -1313,12 +1333,15 @@ def find_candidate_edges_raw(electrode_list, data_on_cells, difference_signals, 
         cell_subset = cell_eis[cell_indices, i, :]
         variance_subset = cell_variance[cell_indices, i, :]
         
+        # print("relevant_indices_start", relevant_indices_start)
+
         # Slice out the relevant points from the template and template error according to the shift information from 'direct_similarity'
         best_match_signals[:, i, :] = np.array([[cell_subset[j, i] for i in range(l, l +num_samples)] for j, l in enumerate(relevant_indices_start)])
+        best_match_latency[:, i] = relevant_indices_start
+        
         best_match_variance[:, i, :] = np.array([[variance_subset[j, i] for i in range(l , l+num_samples)] for j, l in enumerate(relevant_indices_start)])   
 
         best_match_full[:, i, :] = cell_subset
-                     
     # For each matched cell, 
     for i, pair in enumerate(difference_signal_ordering_rep):
                
@@ -1327,10 +1350,10 @@ def find_candidate_edges_raw(electrode_list, data_on_cells, difference_signals, 
         edge_cell_to_error[(pair, cell_ids[cell_indices[i]])] = best_match_variance[i]
         edge_cell_to_loss[(pair, cell_ids[cell_indices[i]])] = negative_log_likelihood[i]
         edge_cell_to_noise_loss[(pair, cell_ids[cell_indices[i]])] = noise_negative_log_likelihood[i]
-        
+        edge_cell_to_latency[(pair, cell_ids[cell_indices[i]])] = best_match_latency[i]
             
            
-    return edge_cell_to_fit_info, edge_cell_to_sig, edge_cell_to_error, edge_cell_to_loss, edge_cell_to_noise_loss
+    return edge_cell_to_fit_info, edge_cell_to_sig, edge_cell_to_error, edge_cell_to_loss, edge_cell_to_noise_loss, edge_cell_to_latency
 
 def find_candidate_edges(electrode_list, data_on_cells, difference_signals, difference_signal_ordering, mask, event_labels, noise,
                                constrained = 'gof',  p = 0.99, max_electrodes_oor = 2, valid_shift_range = 35, artifact_estimate = None, plot = True, no_time = False):
