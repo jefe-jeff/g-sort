@@ -473,6 +473,97 @@ def direct_similarity_wueric(electrode_list: List[int],data_on_cells: Tuple[List
 
     cell_precision = 1.0 / cell_variance # shape (n_cells, n_electrodes, n_timepoints_ei)
 
+    # shape (num_difference_signals, n_electrodes, n_timepoints_diff_sig)
+    masked_difference_signal = mask[None, :, :] * difference_signals
+
+    # shape (n_cells, n_electrodes, n_timepoints_ei)
+    cell_eis_mul_prec = cell_eis * cell_precision
+
+    # shape (n_cells, n_electrodes, n_timepoints_ei)
+    cell_eis2_mul_prec = cell_eis * cell_eis_mul_prec
+
+
+    # shape (n_cells, num_difference_signals, n_electrodes, n_timepoints_ei - n_timepoints_diff_sig + 1)
+    aTa_parallel_corr = corr1d.batch_filter_batch_data_channel_correlate1D(
+        cell_precision, (masked_difference_signal * masked_difference_signal)
+    )
+
+    # shape (n_cells, 1, n_electrodes, n_timepoints_ei - n_timepoints_diff_sig + 1)
+    bTb_parallel_corr = corr1d.batch_filter_batch_data_channel_correlate1D(
+        cell_eis2_mul_prec, mask[None, :, :]
+    )
+
+    # shape (n_cells, num_difference_signals, n_electrodes, n_timepoints_ei - n_timepoints_diff_sig + 1)
+    two_aTb_parallel_corr = corr1d.batch_filter_batch_data_channel_correlate1D(
+        cell_eis_mul_prec, 2 * masked_difference_signal
+    )
+
+    event_pop_axis_sum = np.sum(event_pop, axis=1) # shape (2, )
+    log_event_pop_sum = np.log(event_pop_axis_sum) # shape (2, )
+
+    # shape (n_cells, )
+    var_bump = np.sum(np.log(cell_variance), axis=(1, 2))[None, :] + \
+                (n_electrodes * n_timepoints_ei * log_event_pop_sum[:, None])
+
+    # shape (n_cells, num_difference_signals, n_electrodes, n_timepoints_ei - n_timepoints_diff_sig + 1)
+    normalized_mse_all_no_event_pop = aTa_parallel_corr + bTb_parallel_corr - two_aTb_parallel_corr
+
+    # shape (n_cells, num_difference_signals, n_electrodes)
+    min_mse_index = np.argmin(normalized_mse_all_no_event_pop, axis=3)
+
+    # shape (n_cells, num_difference_signals, n_electrodes, 1) -> (n_cells, num_difference_signals, n_electrodes)
+    min_mse_no_event_pop = np.take_along_axis(normalized_mse_all_no_event_pop,
+                                              np.expand_dims(min_mse_index, 3), axis=3).squeeze(-1)
+    # shape (n_cells, num_difference_signals) -> (num_difference_signals, n_cells)
+    normalized_mse_total = np.sum(min_mse_no_event_pop, axis=2).transpose(1, 0) / event_pop_axis_sum[:, None]
+
+    # shape (num_difference_signals, n_cells) + (num_difference_signals, n_cells) -> (num_difference_signals, n_cells)
+    neg_log_likelihood_total = normalized_mse_total + var_bump
+
+    # shape (n_cells, num_difference_signals, n_electrodes, n_timepoints_ei - n_timepoints_diff_sig + 1)
+    # -> (n_cells, num_difference_signals, n_electrodes) -> (n_cells, num_difference_signals) -> (num_difference_signals, n_cells)
+    noise_neg_log_likelihood_total = np.sum(np.min(aTa_parallel_corr, axis=-1), axis=-1).transpose(1, 0) / event_pop_axis_sum[:, None]
+
+    idxs_total = {el_id : min_mse_index[:,:, idx].T for idx, el_id in enumerate(electrode_list)}
+
+    return normalized_mse_total, idxs_total, neg_log_likelihood_total, noise_neg_log_likelihood_total
+
+def direct_similarity_wueric_fixed_shifts(electrode_list: List[int],data_on_cells: Tuple[List[int], np.ndarray, np.ndarray, np.ndarray],difference_signals: np.ndarray,mask: np.ndarray,event_pop: np.ndarray,noise: np.ndarray):
+    """
+    Alternative approach to direct_similarity, computes the correlations directly
+        with the loops in C++ rather than Python.
+
+    Single-threaded.
+    :param electrode_list: list of electrode indices
+    :param data_on_cells: 4-tuple, elements are
+
+        * cell_ids, List[int] of cell ids
+        * cell_eis, np.ndarray of shape (n_cells, n_electrodes, n_timepoints_ei),
+            contains reduced EIs of the cells
+        * cell_variance, np.ndarray of shape (n_cells, n_electrodes, n_timepoints_ei),
+        * ??
+
+    :param difference_signals: np.ndarray, shape (2, n_electrodes, n_timepoints_diff_sig)
+    :param mask: np.ndarray, shape (n_electrodes, n_timepoints_diff_sig)
+    :param event_pop: np.ndarray
+    :param noise: np.ndarray, shape (n_electrodes_total, ), noise for every channel in the array
+
+    output: np.array, dict<key: int, value: np.array>, np.array
+
+
+    """
+
+    # cell_ids has length n_cells
+    # cell_eis has shape (n_cells, n_electrodes, n_timepoints_ei)
+    # cell_variance has shape (n_cells, n_electrodes, n_timepoints_ei)
+    cell_ids, cell_eis, cell_variance, _, fixed_shifts_ = data_on_cells
+
+    fixed_shifts = fixed_shifts_[:,None,:,None]
+
+    n_cells, n_electrodes, n_timepoints_ei = cell_eis.shape
+
+    cell_precision = 1.0 / cell_variance # shape (n_cells, n_electrodes, n_timepoints_ei)
+
     # shape (2, n_electrodes, n_timepoints_diff_sig)
     masked_difference_signal = mask[None, :, :] * difference_signals
 
@@ -507,9 +598,18 @@ def direct_similarity_wueric(electrode_list: List[int],data_on_cells: Tuple[List
 
     # shape (n_cells, 2, n_electrodes, n_timepoints_ei - n_timepoints_diff_sig + 1)
     normalized_mse_all_no_event_pop = aTa_parallel_corr + bTb_parallel_corr - two_aTb_parallel_corr
-
-    # shape (n_cells, 2, n_electrodes)
-    min_mse_index = np.argmin(normalized_mse_all_no_event_pop, axis=3)
+    
+    # score_fixed_shifts = np.sum(fixed_shifts * normalized_mse_all_no_event_pop, axis=2)
+    # min_mse_index_fixed_shifts = np.argmin(score_fixed_shifts, axis=2)
+    
+    # score_non_fixed_shifts = (1-fixed_shifts) * normalized_mse_all_no_event_pop
+    # min_mse_index_non_fixed_shifts = np.argmin(score_non_fixed_shifts, axis=3)
+    
+    # # shape (n_cells, 2, n_electrodes)
+    # # min_mse_index = np.argmin(normalized_mse_all_no_event_pop, axis=3)
+    # for i in range(n_cells):
+    #     min_mse_index_non_fixed_shifts[i][:,fixed_shifts[i]==1] =  min_mse_index_fixed_shifts[i][fixed_shifts[i]==1]
+    # min_mse_index = min_mse_index_non_fixed_shifts
 
     # shape (n_cells, 2, n_electrodes, 1) -> (n_cells, 2, n_electrodes)
     min_mse_no_event_pop = np.take_along_axis(normalized_mse_all_no_event_pop,
@@ -528,6 +628,7 @@ def direct_similarity_wueric(electrode_list: List[int],data_on_cells: Tuple[List
     idxs_total = {el_id : min_mse_index[:,:, idx].T for idx, el_id in enumerate(electrode_list)}
 
     return normalized_mse_total, idxs_total, neg_log_likelihood_total, noise_neg_log_likelihood_total
+
 
 def direct_similarity_raw_wueric(electrode_list: List[int],data_on_cells: Tuple[List[int], np.ndarray, np.ndarray, np.ndarray],difference_signals: np.ndarray,mask: np.ndarray,event_pop: np.ndarray,noise: np.ndarray):
     """

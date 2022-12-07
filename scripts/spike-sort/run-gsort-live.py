@@ -14,6 +14,7 @@ from itertools import product
 import tqdm
 import logging
 import re
+import json
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-d', '--dataset', type=str, help='Dataset in format YYYY-MM-DD-P.')
@@ -41,6 +42,8 @@ parser.add_argument('-ov', '--overwrite', help="Overwrite pickle files", action=
 parser.add_argument('-sasi', '--sasi', help="Exclude crap in all considerations", action="store_true")
 parser.add_argument('-sc', '--specific_cell', type=int, help='Cell id number.')
 parser.add_argument('-mt', '--mutual_threshold', type=float, help="Overlap threshold for cells to be considered together")
+
+parser.add_argument('-par', '--parameter_filepath', type=str, help="json file from which to load parameters")
 args = parser.parse_args()
 
 dataset = args.dataset
@@ -52,6 +55,12 @@ all_types = args.all
 overwrite = args.overwrite
 sasi = args.sasi
 mode = args.mode
+
+parameter_filepath = args.parameter_filepath
+
+assert parameter_filepath is not None, "Parameter file must be specified for live use"
+assert mode is not None, "Must specific whether data is new or old labview. Example -m oldv"
+
 
 DEFAULT_THREADS = 24
 if args.threads is not None:
@@ -202,37 +211,18 @@ if __name__ == "__main__":
     logging.info('window_buffer ' + str(window_buffer))
     
     
+    with open(parameter_filepath, 'r') as f:
+        parameter_dict = json.load(f)
     
-    patterns = []
     if mode == "oldlv":
-
-        for filename in os.listdir(pattern_path):
-                if filename.startswith('p') and filename.endswith('.mat'): 
-                    pattern_movie = re.findall('\d+', filename)
-                    patterns.append(int(pattern_movie[0]))
-                    
-
-        patterns, num_amps = np.unique(np.array(patterns), return_counts=True)
-        
-        NUM_ELECTRODES = np.max(patterns)
-        NUM_AMPS = np.max(num_amps)
+        patterns = parameter_dict['patterns']
+        NUM_ELECTRODES =  np.max(patterns)
+        NUM_AMPS = np.max(parameter_dict['num_amps'])
     elif mode == "newlv":
-        stim_elecs = []
-        num_amps = []
-        for filename in os.listdir(pattern_path):
-                if filename.startswith('p') and filename.endswith('.mat'): 
-                    pattern = int(re.findall('\d+', filename)[0])
-                    patterns.append(pattern)
-
-                    pattern_file = loadmat(os.path.join(pattern_path, 'p' + str(pattern) + '.mat'), squeeze_me=True, struct_as_record=False)
-                    num_amps.append(len(pattern_file['patternStruct'].amplitudes))
-                    stim_elecs.append(pattern_file['patternStruct'].stimElecs)
-
-        patterns = np.array(patterns)
-        stim_elecs = np.array(stim_elecs, dtype=object)
-        num_amps = np.array(num_amps)
-        NUM_ELECTRODES = np.max(patterns)
-        NUM_AMPS = np.max(num_amps)
+        patterns = parameter_dict['patterns']
+        stim_elecs = parameter_dict['stim_elecs']
+        NUM_ELECTRODES =  np.max(parameter_dict['patterns'])
+        NUM_AMPS = np.max(parameter_dict['num_amps'])
     else:
         assert  1==0, "Specify new or oldlv data"
             
@@ -274,7 +264,7 @@ if __name__ == "__main__":
                 good_inds = np.array(good_inds)-1
             else:
                 assert 1==0, "Specify new or oldlv data"
-                   
+            
             if len(good_inds)==0:
                 continue
     
@@ -349,23 +339,37 @@ if __name__ == "__main__":
     q = manager.Queue()    
 
     pool = mp.Pool(processes = threads)
-    
-    total_jobs = 0
-    for p in patterns:
-        for k in range(NUM_AMPS):
-            if (run_fp[p-1, k] == 0):
-                total_jobs += 1
-    print("total jobs", total_jobs)
-                
-    watcher = pool.apply_async(listener, (total_jobs, q))
 
-    savemat(os.path.join(outpath,'parameters.mat'), {'cells': cellids,'patterns':patterns, 'movies':NUM_AMPS, 'gsorted_cells': np.sort(running_cells_ind)})
-            
+    
     preloaded_data = (cellids, running_cells_ind, relevant_cells, mutual_cells,total_cell_to_electrode_list,start_time_limit,end_time_limit,estim_analysis_path, noise,outpath,n_to_data_on_cells,NUM_CHANNELS, cluster_delay)
 
-    arguments = [(p, k, preloaded_data, q) for p in patterns for k in range(NUM_AMPS) if run_fp[p-1, k] == 0]
-    result = pool.starmap_async(run_pattern_movie, arguments)
+    ran_stimuli = []
+   
+    while True:
+        new_stimuli = []
+        all_stimuli = []
+        for filename in os.listdir(pattern_path):
+            if filename.startswith('p') and filename.endswith('.mat'): 
+                pattern = int(re.findall('\d+', filename)[0])
+                
+                try:
+                    pattern_file = loadmat(os.path.join(pattern_path, filename), squeeze_me=True, struct_as_record=False)
+                except:
+                    continue
+                amps = pattern_file['patternStruct'].amplitudes
+                ampsReady = np.argwhere(np.any(amps, axis = 1)).flatten() if len(amps.shape) == 2 else np.argwhere(amps).flatten()
+                all_stimuli += [(pattern, movie) for movie in ampsReady ]
+                
+                new_stimuli += [(pattern, movie) for movie in ampsReady if (pattern, movie) not in ran_stimuli and not run_fp[pattern-1, movie]]
+        
+        if len(new_stimuli):
+            watcher = pool.apply_async(listener, (len(new_stimuli), q,))
+            arguments = [(p, k, preloaded_data, q) for (p,k) in new_stimuli]
+            result = pool.starmap_async(run_pattern_movie, arguments)
+            ran_stimuli += new_stimuli
 
+    savemat(os.path.join(outpath,'parameters.mat'), {'cells': cellids,'patterns':patterns, 'movies':NUM_AMPS, 'gsorted_cells': np.sort(running_cells_ind)})
+      
     
     print("Finished")
 
