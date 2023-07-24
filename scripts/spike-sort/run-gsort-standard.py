@@ -18,7 +18,7 @@ import re
 parser = argparse.ArgumentParser()
 parser.add_argument('-d', '--dataset', type=str, help='Dataset in format YYYY-MM-DD-P.')
 parser.add_argument('-w', '--wnoise', type=str, help='White noise run in format dataXXX (or streamed/dataXXX or kilosort_dataXXX/dataXXX, etc.).')
-parser.add_argument('-e', '--estim', type=str, help='Estim run in format dataXXX.')
+parser.add_argument('-e', '--estim', type=str, nargs = '+', help='Estim run in format dataXXX.')
 parser.add_argument('-o', '--output', type=str, help='/path/to/output/directory.')
 parser.add_argument('-t', '--threads', type=int, help='Number of threads to use in computation.')
 parser.add_argument('-i', '--interest', type=float, help="Noise threshold for cells of interest")
@@ -37,7 +37,6 @@ parser.add_argument('-eb', '--estim_base', type=str,  help="Estim base.")
 parser.add_argument('-vb', '--vstim_base', type=str,  help="Vstim base.")
 
 parser.add_argument('-a', '--all', help="Run gsort on all cell types.", action="store_true")
-parser.add_argument('-ov', '--overwrite', help="Overwrite pickle files", action="store_true")
 parser.add_argument('-sasi', '--sasi', help="Exclude crap in all considerations", action="store_true")
 parser.add_argument('-sc', '--specific_cell', type=int, help='Cell id number.')
 parser.add_argument('-mt', '--mutual_threshold', type=float, help="Overlap threshold for cells to be considered together")
@@ -45,11 +44,10 @@ args = parser.parse_args()
 
 dataset = args.dataset
 vstim_datarun = args.wnoise
-estim_datarun = args.estim
+estim_datarun = args.estim[0]
 filepath = args.output
 noise_thresh = args.interest
 all_types = args.all
-overwrite = args.overwrite
 sasi = args.sasi
 mode = args.mode
 
@@ -118,8 +116,12 @@ vstim_analysis_path = os.path.join(VISUAL_ANALYSIS_BASE, dataset, vstim_datarun)
 
 print(vstim_analysis_path)
 ESTIM_ANALYSIS_BASE = args.estim_base if args.estim_base!= None else '/Volumes/Analysis'
-estim_analysis_path = os.path.join(ESTIM_ANALYSIS_BASE, dataset, estim_datarun)
-pattern_path = os.path.join(estim_analysis_path, 'pattern_files')
+estim_analysis_path = []
+for estim in args.estim:
+    estim_analysis_path.append(os.path.join(ESTIM_ANALYSIS_BASE, dataset, estim))
+print(estim_analysis_path)
+
+pattern_path = os.path.join(estim_analysis_path[0], 'pattern_files')
 
 vstim_data = vl.load_vision_data(vstim_analysis_path,
                                  vstim_datarun.rsplit('/')[-1],
@@ -225,7 +227,11 @@ if __name__ == "__main__":
                     patterns.append(pattern)
 
                     pattern_file = loadmat(os.path.join(pattern_path, 'p' + str(pattern) + '.mat'), squeeze_me=True, struct_as_record=False)
-                    num_amps.append(len(pattern_file['patternStruct'].amplitudes))
+                    # Add case to handle single amplitude (AJP 03/28/23)
+                    if np.isscalar(pattern_file['patternStruct'].amplitudes):
+                        num_amps.append(1)
+                    else:
+                        num_amps.append(len(pattern_file['patternStruct'].amplitudes))
                     stim_elecs.append(pattern_file['patternStruct'].stimElecs)
 
         patterns = np.array(patterns)
@@ -362,7 +368,10 @@ if __name__ == "__main__":
     savemat(os.path.join(outpath,'parameters.mat'), {'cells': cellids,'patterns':patterns, 'movies':NUM_AMPS, 'gsorted_cells': np.sort(running_cells_ind)})
             
     preloaded_data = (cellids, running_cells_ind, relevant_cells, mutual_cells,total_cell_to_electrode_list,start_time_limit,end_time_limit,estim_analysis_path, noise,outpath,n_to_data_on_cells,NUM_CHANNELS, cluster_delay)
-
+    # import pickle
+    # f = open('preloaded_data_exhaustive.pkl', 'wb')
+    # pickle.dump(preloaded_data, f)
+    # f.close()
     arguments = [(p, k, preloaded_data, q) for p in patterns for k in range(NUM_AMPS) if run_fp[p-1, k] == 0]
     result = pool.starmap_async(run_pattern_movie, arguments)
 
