@@ -209,6 +209,63 @@ def compute_duplicates(vstim_data, noise):
             duplicates.add(cell)     
     return duplicates, cell_ei
 
+def compute_duplicates_new(vstim_data, allowed_types, MIN_CORR=0.95):
+    duplicates = set()
+    cellids = vstim_data.get_cell_ids()
+    for cell in cellids:
+        if cell in duplicates:
+            continue
+
+        cell_ei = vstim_data.get_ei_for_cell(cell).ei
+        cell_ei_error = vstim_data.get_ei_for_cell(cell).ei_error
+        cell_ei_power = np.sum(cell_ei**2,axis=1)
+        celltype = vstim_data.get_cell_type_for_cell(cell).lower()
+
+        allowed_cell = False
+        for allowed_type in allowed_types:
+            if allowed_type.lower() in celltype:
+                allowed_cell = True
+                break
+                # after breaking, allowed_type will be set to the type that was found
+
+        if allowed_cell:
+            print(cell, celltype, allowed_type)
+            for other_cell in cellids:
+                if cell == other_cell or other_cell in duplicates:
+                    continue
+                other_celltype = vstim_data.get_cell_type_for_cell(other_cell).lower()
+                allowed_othercell = False
+                for allowed_othertype in allowed_types:
+                    if allowed_othertype.lower() in other_celltype:
+                        allowed_othercell = True
+                        break
+                
+                if allowed_type == allowed_othertype and allowed_othercell:
+                    print(cell, celltype, other_cell, other_celltype)   
+                    other_cell_ei = vstim_data.get_ei_for_cell(other_cell).ei
+                    other_cell_ei_power = np.sum(other_cell_ei**2,axis=1)
+                    # Compute the correlation and figure out if we have duplicates: take the larger number of spikes.
+                    corr = np.corrcoef(cell_ei_power,other_cell_ei_power)[0,1]
+                    if corr >= MIN_CORR:
+                        
+                        n_spikes_cell = vstim_data.get_spike_times_for_cell(cell).shape[0]
+                        n_spikes_other_cell = vstim_data.get_spike_times_for_cell(other_cell).shape[0]
+                        # Take the larger number of spikes, unless the one with fewer is a light responsive type.
+                        if n_spikes_cell > n_spikes_other_cell:
+                            print(f'DUPLICATE FOUND: {cell} and {other_cell} with corr {corr}, choosing {other_cell} as duplicate')
+                            duplicates.add(other_cell)
+                        else:
+                            print(f'DUPLICATE FOUND: {cell} and {other_cell} with corr {corr}, choosing {cell} as duplicate')
+                            duplicates.add(cell)
+
+    # for cell in set(cellids).difference(duplicates):
+    #     cell_ei_error = vstim_data.get_ei_for_cell(cell).ei_error[vstim_data.channel_noise != 0]
+        
+    #     if np.any(cell_ei_error == 0):
+    #         duplicates.add(cell)     
+
+    return duplicates, cell_ei
+
 def compute_latency_error(edge_to_matched_signals, n, bad_edges_, electrode, offset = 50, too_early = 5, too_late = 25):
     """
     Purpose: Find edges wherein the assigned template fall outside of the accepted window
