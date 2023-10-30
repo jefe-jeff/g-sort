@@ -6,15 +6,15 @@ source /Volumes/Lab/Development/anaconda3/etc/profile.d/conda.sh
 conda activate g-sort-bertha-main
 
 # Base directories for estim and vstim data
-estim_base=("/Volumes/Analysis")
-vstim_base=("/Volumes/Analysis/")
+estim_base=("/Volumes/Scratch/Users/praful/pp_out_v2")
+vstim_base=("/Volumes/Acquisition/Analysis/")
 
 # Run-specific information
-datasets=("2016-06-13-0")
-wnoises=("kilosort_data000/data000")
+datasets=("2023-10-30-0")
+wnoises=("data000")
 estims=("data001")
-labview="oldlv"
-celltypes="parasol midget"
+labview="newlv"
+celltypes="on off"
 excludedtypes="bad dup"
 
 # # RAPHE DATASETS

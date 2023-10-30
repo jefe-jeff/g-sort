@@ -130,8 +130,8 @@ vstim_data = vl.load_vision_data(vstim_analysis_path,
                                  include_noise=True,
                                  include_neurons=True)
 
-vstim_data.update_cell_type_classifications_from_text_file(os.path.join(vstim_analysis_path, 
-                                                            f'{os.path.basename(vstim_datarun)}.classification_agogliet.txt'))
+vstim_data.update_cell_type_classifications_from_text_file(os.path.join(vstim_analysis_path, 'classification_deduped.txt'))
+
 if all_types:
     all_cell_types = vstim_data.get_all_present_cell_types()
     
@@ -144,10 +144,10 @@ if all_types:
 
 noise = vstim_data.channel_noise
 
-duplicates, cell_ei = compute_duplicates_new(vstim_data, cell_types)  
+allowed_types = cell_types + ['crap']
+duplicates, cell_ei = compute_duplicates_new(vstim_data, allowed_types)  
 print(duplicates)
 NUM_CHANNELS = len(cell_ei)
-
 
 amplitudes = np.array([0.10053543, 0.11310236, 0.11938583, 0.13195276, 0.14451969,
                        0.16337008, 0.17593701, 0.1947874 , 0.2136378 , 0.23877165,

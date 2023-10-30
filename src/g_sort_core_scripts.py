@@ -258,11 +258,11 @@ def compute_duplicates_new(vstim_data, allowed_types, MIN_CORR=0.95):
                             print(f'DUPLICATE FOUND: {cell} and {other_cell} with corr {corr}, choosing {cell} as duplicate')
                             duplicates.add(cell)
 
-    # for cell in set(cellids).difference(duplicates):
-    #     cell_ei_error = vstim_data.get_ei_for_cell(cell).ei_error[vstim_data.channel_noise != 0]
+    for cell in set(cellids).difference(duplicates):
+        cell_ei_error = vstim_data.get_ei_for_cell(cell).ei_error[vstim_data.channel_noise != 0]
         
-    #     if np.any(cell_ei_error == 0):
-    #         duplicates.add(cell)     
+        if np.any(cell_ei_error == 0):
+            duplicates.add(cell)     
 
     return duplicates, cell_ei
 
