@@ -7,12 +7,12 @@ conda activate g-sort-bertha-main
 
 # Base directories for estim and vstim data
 estim_base=("/Volumes/Scratch/Users/praful/pp_out_v2")
-vstim_base=("/Volumes/Acquisition/Analysis/")
+vstim_base=("/Volumes/Analysis/")
 
 # Run-specific information
 datasets=("2023-10-30-0")
-wnoises=("data000")
-estims=("data001")
+wnoises=("streamed/data000")
+estims=("data005")
 labview="newlv"
 celltypes="on off"
 excludedtypes="bad dup"

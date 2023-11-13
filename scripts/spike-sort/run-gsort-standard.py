@@ -144,7 +144,10 @@ if all_types:
 
 noise = vstim_data.channel_noise
 
-allowed_types = cell_types + ['crap']
+if not sasi:
+    allowed_types = cell_types + ['crap']
+else:
+    allowed_types = cell_types
 duplicates, cell_ei = compute_duplicates_new(vstim_data, allowed_types)  
 print(duplicates)
 NUM_CHANNELS = len(cell_ei)
